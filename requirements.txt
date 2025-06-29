@@ -1,13 +1,12 @@
 streamlit
 pandas
 numpy
+matplotlib
 scikit-learn
-ultralytics
 torch
 torchvision
-Pillow
 requests
+Pillow
+folium
+streamlit_folium
 joblib
-snscrape
-matplotlib
-
