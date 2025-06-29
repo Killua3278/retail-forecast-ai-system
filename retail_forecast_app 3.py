@@ -57,14 +57,13 @@ def fetch_or_upload_satellite_image(coords):
     if uploaded_file:
         return Image.open(uploaded_file).convert("RGB")
 
-    # Default fallback NASA placeholder
-    url = "https://eoimages.gsfc.nasa.gov/images/imagerecords/79000/79915/world.topo.bathy.200412.3x5400x2700.png"
+    url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key=" + os.getenv("GOOGLE_MAPS_API_KEY", "")
     try:
         response = requests.get(url)
         response.raise_for_status()
         return Image.open(io.BytesIO(response.content)).convert("RGB")
     except:
-        st.error("Failed to load fallback image.")
+        st.error("Failed to load satellite image.")
         return Image.new("RGB", (512, 512), color=(255, 255, 255))
 
 # --- 2. Extract Vision Features ---
@@ -85,8 +84,6 @@ def get_safegraph_score(lat, lon):
     safegraph_key = os.getenv("SAFEGRAPH_API_KEY")
     if not safegraph_key:
         return np.random.uniform(0, 1)
-    # Placeholder for actual SafeGraph call
-    # Here you would call your endpoint with lat/lon and extract foot traffic info
     return np.random.uniform(0, 1)
 
 # --- 4. Twitter v2 Social Sentiment ---
@@ -185,7 +182,7 @@ if coords:
         save_prediction(store, coords, pred, foot, soc)
         plot_trends(store)
 
-        st.subheader("🧐 Recommendations")
+        st.subheader("🤨 Recommendations")
         if foot < 0.3:
             st.warning("🚧 Low foot traffic: improve signage or placement.")
         if soc < 15:
