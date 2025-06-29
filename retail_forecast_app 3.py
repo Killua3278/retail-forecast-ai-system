@@ -9,6 +9,11 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
+# Load config
+import theme_config
+store_type = st.session_state.get("store_type", "Any")
+theme = st.session_state.get("theme", "Light")
+
 # Ensure torchvision is available before importing
 try:
     from torchvision import transforms
@@ -83,7 +88,6 @@ def load_model():
     if os.path.exists("model.pkl"):
         return joblib.load("model.pkl")
     else:
-        # Generate dummy model
         from sklearn.datasets import make_regression
         X, y = make_regression(n_samples=500, n_features=513, noise=0.2)
         model = GradientBoostingRegressor().fit(X, y)
@@ -93,7 +97,7 @@ def load_model():
 # 7. Store sales history
 sales_log = "sales_history.csv"
 def save_prediction(store, coords, pred):
-    df = pd.DataFrame([[store, coords[0], coords[1], pred]], columns=["store", "lat", "lon", "sales"])
+    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred]], columns=["store", "lat", "lon", "type", "sales"])
     if os.path.exists(sales_log):
         old = pd.read_csv(sales_log)
         new = pd.concat([old, df], ignore_index=True)
@@ -133,15 +137,18 @@ if st.button("Predict Weekly Sales"):
         save_prediction(store, coords, prediction)
         plot_trends(store)
 
-        # Recommend actions
         foot_traffic = features[-2]
         social = features[-1]
+        st.subheader("🧠 Smart Recommendations")
         if foot_traffic < 0.3:
-            st.warning("⚠️ Consider improving signage or exterior displays to increase foot traffic.")
+            st.warning("🚧 Low visibility: Consider adding signage or window displays.")
         if social < 20:
-            st.info("💡 Try running a local Instagram promo or hashtag contest to build buzz.")
+            st.info("📱 Minimal social buzz: Try a geo-tagged giveaway on Instagram or TikTok.")
+        if foot_traffic > 0.7 and social > 60:
+            st.success("🎯 High attention zone: Ideal time to upsell or promote bundles!")
 
     except Exception as e:
         st.error(f"Error: {e}")
+
 
 
