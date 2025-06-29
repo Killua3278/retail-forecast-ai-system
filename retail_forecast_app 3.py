@@ -48,6 +48,7 @@ def set_theme():
             </style>
         """, unsafe_allow_html=True)
 
+set_theme()
 
 if st.sidebar.button("Clear Sales History"):
     if os.path.exists("sales_history.csv"):
@@ -69,14 +70,34 @@ def fetch_or_upload_satellite_image(coords):
     if uploaded_file:
         return Image.open(uploaded_file).convert("RGB")
 
-    url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key=" + os.getenv("GOOGLE_MAPS_API_KEY", "")
+    google_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not google_key:
+        # Fallback NASA image or white image
+        try:
+            url = "https://eoimages.gsfc.nasa.gov/images/imagerecords/79000/79915/world.topo.bathy.200412.3x5400x2700.png"
+            response = requests.get(url)
+            response.raise_for_status()
+            return Image.open(io.BytesIO(response.content)).convert("RGB")
+        except Exception as e:
+            st.error(f"Failed to load fallback image: {e}")
+            return Image.new("RGB", (512, 512), color=(255, 255, 255))
+
+    url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key={google_key}"
     try:
         response = requests.get(url)
         response.raise_for_status()
         return Image.open(io.BytesIO(response.content)).convert("RGB")
-    except:
-        st.error("Failed to load satellite image.")
-        return Image.new("RGB", (512, 512), color=(255, 255, 255))
+    except Exception as e:
+        st.error(f"Failed to load Google Maps satellite image: {e}")
+        # fallback NASA image as above
+        try:
+            url = "https://eoimages.gsfc.nasa.gov/images/imagerecords/79000/79915/world.topo.bathy.200412.3x5400x2700.png"
+            response = requests.get(url)
+            response.raise_for_status()
+            return Image.open(io.BytesIO(response.content)).convert("RGB")
+        except Exception as e2:
+            st.error(f"Failed to load fallback image: {e2}")
+            return Image.new("RGB", (512, 512), color=(255, 255, 255))
 
 # --- 2. Extract Vision Features ---
 def extract_satellite_features(image):
@@ -122,9 +143,13 @@ def build_feature_vector(image, coords):
 # --- 6. Load or Train Model ---
 def load_model():
     from sklearn.ensemble import GradientBoostingRegressor
-    if os.path.exists("model.pkl"):
-        return joblib.load("model.pkl")
-    else:
+    try:
+        if os.path.exists("model.pkl"):
+            return joblib.load("model.pkl")
+        else:
+            raise FileNotFoundError
+    except Exception as e:
+        st.warning(f"Model loading failed ({e}), training a new model...")
         from sklearn.datasets import make_regression
         X, y = make_regression(n_samples=500, n_features=513, noise=0.2)
         model = GradientBoostingRegressor().fit(X, y)
@@ -194,14 +219,11 @@ if coords:
         save_prediction(store, coords, pred, foot, soc)
         plot_trends(store)
 
-        st.subheader("🤨 Recommendations")
+        st.subheader("🧐 Recommendations")
         if foot < 0.3:
             st.warning("🚧 Low foot traffic: improve signage or placement.")
         if soc < 15:
             st.info("📱 Run a local Instagram giveaway or post.")
         if foot > 0.7 and soc > 60:
             st.success("🎉 High attention area: Upsell with bundles!")
-
-
-
 
