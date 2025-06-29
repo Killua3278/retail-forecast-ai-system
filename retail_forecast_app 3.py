@@ -9,7 +9,7 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Load config
+# Load sidebar config (store type, theme)
 import theme_config
 store_type = st.session_state.get("store_type", "Any")
 theme = st.session_state.get("theme", "Light")
@@ -23,10 +23,10 @@ except ModuleNotFoundError as e:
     st.code("torchvision")
     raise e
 
-# 1. Fetch satellite image (NASA API for demo)
+# 1. Fetch satellite image (NASA API demo)
 def fetch_satellite_image(coords):
     lat, lon = coords
-    nasa_api_key = "DEMO_KEY"  # Replace with your NASA API key
+    nasa_api_key = "DEMO_KEY"  # Replace with your NASA API key if available
     metadata_url = (
         f"https://api.nasa.gov/planetary/earth/assets?lon={lon}&lat={lat}&dim=0.1&api_key={nasa_api_key}"
     )
@@ -44,7 +44,7 @@ def fetch_satellite_image(coords):
     image = Image.open(io.BytesIO(image_response.content)).convert("RGB")
     return image
 
-# 2. Extract features from satellite image using pretrained ResNet18
+# 2. Extract features using pretrained ResNet18
 def extract_satellite_features(image):
     model = resnet18(pretrained=True)
     model.eval()
@@ -57,11 +57,11 @@ def extract_satellite_features(image):
         features = model(tensor)
     return features.numpy().flatten()
 
-# 3. Placeholder for foot traffic data
+# 3. Placeholder foot traffic data (simulate)
 def get_mock_foot_traffic_score(location_name):
     return np.random.uniform(0, 1)
 
-# 4. Live social media sentiment (simulated Twitter search count)
+# 4. Social sentiment using snscrape (Twitter/X)
 def fetch_social_sentiment(lat, lon):
     try:
         import snscrape.modules.twitter as sntwitter
@@ -71,7 +71,7 @@ def fetch_social_sentiment(lat, lon):
         since = today - timedelta(days=7)
         query = f"near:{lat},{lon} within:1km since:{since}"
         tweets = list(sntwitter.TwitterSearchScraper(query).get_items())
-        return min(len(tweets), 100)  # Limit to 100 for scale
+        return min(len(tweets), 100)  # Limit to 100
     except:
         return np.random.randint(0, 100)
 
@@ -82,7 +82,7 @@ def build_feature_vector(image, location_name, coords):
     social = fetch_social_sentiment(*coords)
     return np.concatenate([sat_features, [foot_traffic, social]])
 
-# 6. Load or generate synthetic model.pkl
+# 6. Load or generate model.pkl automatically
 def load_model():
     from sklearn.ensemble import GradientBoostingRegressor
     if os.path.exists("model.pkl"):
@@ -94,7 +94,7 @@ def load_model():
         joblib.dump(model, "model.pkl")
         return model
 
-# 7. Store sales history
+# 7. Save sales prediction history
 sales_log = "sales_history.csv"
 def save_prediction(store, coords, pred):
     df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred]], columns=["store", "lat", "lon", "type", "sales"])
@@ -118,25 +118,27 @@ def plot_trends(store):
     df["timestamp"] = pd.date_range(end=pd.Timestamp.today(), periods=len(df))
     st.line_chart(df.set_index("timestamp")["sales"])
 
-# 8. Streamlit interface
-st.title("Retail Store Weekly Sales Forecast")
-store = st.text_input("Enter store name")
-location = st.text_input("Enter coordinates (lat, lon)")
+# 8. Main UI
+st.title("🛍️ Retail Store Weekly Sales Forecast")
+store = st.text_input("🏪 Enter store name")
+location = st.text_input("📍 Enter coordinates (lat, lon)")
 
 if st.button("Predict Weekly Sales"):
     try:
         coords = tuple(map(float, location.split(",")))
         image = fetch_satellite_image(coords)
-        st.image(image, caption="Satellite View")
+        st.image(image, caption=f"🛰️ Satellite View of {store}", use_column_width=True)
+
         features = build_feature_vector(image, store, coords)
         model = load_model()
         prediction = model.predict([features])[0]
 
-        st.success(f"📈 Predicted Weekly Sales: ${prediction:,.2f}")
+        st.markdown(f"### 📈 Predicted Weekly Sales: **${prediction:,.2f}**")
 
         save_prediction(store, coords, prediction)
         plot_trends(store)
 
+        # Recommendations
         foot_traffic = features[-2]
         social = features[-1]
         st.subheader("🧠 Smart Recommendations")
@@ -146,9 +148,6 @@ if st.button("Predict Weekly Sales"):
             st.info("📱 Minimal social buzz: Try a geo-tagged giveaway on Instagram or TikTok.")
         if foot_traffic > 0.7 and social > 60:
             st.success("🎯 High attention zone: Ideal time to upsell or promote bundles!")
-
     except Exception as e:
         st.error(f"Error: {e}")
-
-
 
