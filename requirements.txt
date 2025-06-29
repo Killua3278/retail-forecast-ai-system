@@ -4,13 +4,8 @@ Pillow
 torch
 torchvision
 joblib
-p
-typing
 folium
 streamlit-folium
 matplotlib
 python-dotenv
 scikit-learn
-p==1.26.4
-p==1.26.4
-
