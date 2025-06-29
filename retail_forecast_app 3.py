@@ -3,10 +3,18 @@ import requests
 from PIL import Image
 import io
 import numpy as np
-from torchvision import transforms
-from torchvision.models import resnet18
 import torch
 import joblib
+import os
+
+# Ensure torchvision is available before importing
+try:
+    from torchvision import transforms
+    from torchvision.models import resnet18
+except ModuleNotFoundError as e:
+    st.error("❌ Required module 'torchvision' not found. Please add it to requirements.txt:")
+    st.code("torchvision")
+    raise e
 
 # 1. Fetch satellite image (NASA API for demo)
 def fetch_satellite_image(coords):
@@ -46,9 +54,19 @@ def extract_satellite_features(image):
 def get_mock_foot_traffic_score(location_name):
     return np.random.uniform(0, 1)
 
-# 4. Placeholder for social media chatter
+# 4. Live social media sentiment (simulated Twitter search count)
 def fetch_social_sentiment(lat, lon):
-    return np.random.randint(0, 100)
+    try:
+        import snscrape.modules.twitter as sntwitter
+        from datetime import date, timedelta
+
+        today = date.today()
+        since = today - timedelta(days=7)
+        query = f"near:{lat},{lon} within:1km since:{since}"
+        tweets = list(sntwitter.TwitterSearchScraper(query).get_items())
+        return min(len(tweets), 100)  # Limit to 100 for scale
+    except:
+        return np.random.randint(0, 100)
 
 # 5. Build feature vector
 def build_feature_vector(image, location_name, coords):
@@ -57,13 +75,18 @@ def build_feature_vector(image, location_name, coords):
     social = fetch_social_sentiment(*coords)
     return np.concatenate([sat_features, [foot_traffic, social]])
 
-# 6. Load model (placeholder)
+# 6. Load or generate synthetic model.pkl
 def load_model():
-    try:
+    from sklearn.ensemble import GradientBoostingRegressor
+    if os.path.exists("model.pkl"):
         return joblib.load("model.pkl")
-    except:
-        from sklearn.ensemble import GradientBoostingRegressor
-        return GradientBoostingRegressor()  # fallback dummy model
+    else:
+        # Generate dummy model
+        from sklearn.datasets import make_regression
+        X, y = make_regression(n_samples=500, n_features=513, noise=0.2)
+        model = GradientBoostingRegressor().fit(X, y)
+        joblib.dump(model, "model.pkl")
+        return model
 
 # 7. Streamlit interface
 st.title("Retail Store Weekly Sales Forecast")
@@ -91,3 +114,4 @@ if st.button("Predict Weekly Sales"):
 
     except Exception as e:
         st.error(f"Error: {e}")
+
