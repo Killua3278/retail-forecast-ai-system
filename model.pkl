@@ -2,6 +2,11 @@ from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.datasets import make_regression
 import joblib
 
-X, y = make_regression(n_samples=100, n_features=512 + 2)
+# Generate synthetic training data
+X, y = make_regression(n_samples=100, n_features=514)
+
+# Train the model
 model = GradientBoostingRegressor().fit(X, y)
+
+# Save the model
 joblib.dump(model, "model.pkl")
