@@ -76,17 +76,23 @@ def fetch_or_upload_satellite_image(coords):
         return Image.new("RGB", (512, 512), color=(255, 255, 255))
 
 # --- 2. Extract Vision Features ---
+import torch.nn as nn
+
 def extract_satellite_features(image):
     model = resnet18(pretrained=True)
     model.eval()
+    # Remove the last fully connected layer to get 512-dim embedding
+    model = nn.Sequential(*list(model.children())[:-1])
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
     ])
     tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
-        features = model(tensor)
+        features = model(tensor)  # shape: (1, 512, 1, 1)
+        features = features.view(features.size(0), -1)  # flatten to (1, 512)
     return features.numpy().flatten()
+
 
 # --- 3. SafeGraph Foot Traffic API (mocked unless key provided) ---
 def get_safegraph_score(lat, lon):
