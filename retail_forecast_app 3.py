@@ -6,6 +6,8 @@ import numpy as np
 import torch
 import joblib
 import os
+import pandas as pd
+import matplotlib.pyplot as plt
 
 # Ensure torchvision is available before importing
 try:
@@ -88,7 +90,31 @@ def load_model():
         joblib.dump(model, "model.pkl")
         return model
 
-# 7. Streamlit interface
+# 7. Store sales history
+sales_log = "sales_history.csv"
+def save_prediction(store, coords, pred):
+    df = pd.DataFrame([[store, coords[0], coords[1], pred]], columns=["store", "lat", "lon", "sales"])
+    if os.path.exists(sales_log):
+        old = pd.read_csv(sales_log)
+        new = pd.concat([old, df], ignore_index=True)
+    else:
+        new = df
+    new.to_csv(sales_log, index=False)
+
+def plot_trends(store):
+    if not os.path.exists(sales_log):
+        st.info("No historical data yet.")
+        return
+    df = pd.read_csv(sales_log)
+    df = df[df.store == store]
+    if df.empty:
+        st.info("No historical data for this store.")
+        return
+    st.subheader("📊 Sales Trend for " + store)
+    df["timestamp"] = pd.date_range(end=pd.Timestamp.today(), periods=len(df))
+    st.line_chart(df.set_index("timestamp")["sales"])
+
+# 8. Streamlit interface
 st.title("Retail Store Weekly Sales Forecast")
 store = st.text_input("Enter store name")
 location = st.text_input("Enter coordinates (lat, lon)")
@@ -104,6 +130,9 @@ if st.button("Predict Weekly Sales"):
 
         st.success(f"📈 Predicted Weekly Sales: ${prediction:,.2f}")
 
+        save_prediction(store, coords, prediction)
+        plot_trends(store)
+
         # Recommend actions
         foot_traffic = features[-2]
         social = features[-1]
@@ -114,4 +143,5 @@ if st.button("Predict Weekly Sales"):
 
     except Exception as e:
         st.error(f"Error: {e}")
+
 
