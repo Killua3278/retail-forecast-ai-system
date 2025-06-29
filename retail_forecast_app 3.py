@@ -81,16 +81,15 @@ import torch.nn as nn
 def extract_satellite_features(image):
     model = resnet18(pretrained=True)
     model.eval()
-    # Remove the last fully connected layer to get 512-dim embedding
-    model = nn.Sequential(*list(model.children())[:-1])
+    model = nn.Sequential(*list(model.children())[:-1])  # remove last fc layer
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
     ])
     tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
-        features = model(tensor)  # shape: (1, 512, 1, 1)
-        features = features.view(features.size(0), -1)  # flatten to (1, 512)
+        features = model(tensor)
+        features = features.view(features.size(0), -1)  # flatten to (1,512)
     return features.numpy().flatten()
 
 
@@ -120,10 +119,11 @@ def fetch_social_sentiment_v2(lat, lon):
 
 # --- 5. Build Feature Vector ---
 def build_feature_vector(image, coords):
-    sat_features = extract_satellite_features(image)
-    foot_traffic = get_safegraph_score(*coords)
-    social = fetch_social_sentiment_v2(*coords)
+    sat_features = extract_satellite_features(image)  # 512 features
+    foot_traffic = get_safegraph_score(*coords)      # 1 feature
+    social = fetch_social_sentiment_v2(*coords)      # 1 feature
     return np.concatenate([sat_features, [foot_traffic, social]]), foot_traffic, social
+
 
 # --- 6. Load or Train Model ---
 def load_model():
