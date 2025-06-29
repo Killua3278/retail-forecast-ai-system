@@ -24,18 +24,30 @@ def set_theme():
     if st.session_state.dark_mode:
         st.markdown("""
             <style>
-            .main { background-color: #121212; color: #e0e0e0; }
-            .stButton>button { background-color: #333; color: white; }
-            .sidebar .sidebar-content { background-color: #1e1e1e; color: #ddd; }
+            body, .main, .block-container, .sidebar .sidebar-content {
+                background-color: #121212 !important;
+                color: #e0e0e0 !important;
+            }
+            button, .stButton>button {
+                background-color: #333 !important;
+                color: white !important;
+            }
             </style>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
             <style>
-            .main, .sidebar .sidebar-content { background-color: white; color: black; }
+            body, .main, .block-container, .sidebar .sidebar-content {
+                background-color: white !important;
+                color: black !important;
+            }
+            button, .stButton>button {
+                background-color: #eee !important;
+                color: black !important;
+            }
             </style>
         """, unsafe_allow_html=True)
-set_theme()
+
 
 if st.sidebar.button("Clear Sales History"):
     if os.path.exists("sales_history.csv"):
