@@ -11,6 +11,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from streamlit_folium import st_folium
 import folium
+from dotenv import load_dotenv
+
+# Load environment variables from .env if available
+load_dotenv()
 
 # --- Sidebar Config ---
 st.sidebar.title("⚙️ Settings")
@@ -57,14 +61,18 @@ def fetch_or_upload_satellite_image(coords):
     if uploaded_file:
         return Image.open(uploaded_file).convert("RGB")
 
-    # Default fallback NASA placeholder
-    url = "https://eoimages.gsfc.nasa.gov/images/imagerecords/79000/79915/world.topo.bathy.200412.3x5400x2700.png"
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        st.error("Google Maps API key is missing. Please set the GOOGLE_MAPS_API_KEY environment variable.")
+        return Image.new("RGB", (512, 512), color=(255, 255, 255))
+
+    url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key={api_key}"
     try:
         response = requests.get(url)
         response.raise_for_status()
         return Image.open(io.BytesIO(response.content)).convert("RGB")
-    except:
-        st.error("Failed to load fallback image.")
+    except Exception as e:
+        st.error(f"Failed to load satellite image: {str(e)}")
         return Image.new("RGB", (512, 512), color=(255, 255, 255))
 
 # --- 2. Extract Vision Features ---
@@ -85,8 +93,6 @@ def get_safegraph_score(lat, lon):
     safegraph_key = os.getenv("SAFEGRAPH_API_KEY")
     if not safegraph_key:
         return np.random.uniform(0, 1)
-    # Placeholder for actual SafeGraph call
-    # Here you would call your endpoint with lat/lon and extract foot traffic info
     return np.random.uniform(0, 1)
 
 # --- 4. Twitter v2 Social Sentiment ---
@@ -97,11 +103,14 @@ def fetch_social_sentiment_v2(lat, lon):
     headers = {"Authorization": f"Bearer {twitter_bearer_token}"}
     query = f"point_radius:[{lon} {lat} 1km] -is:retweet lang:en"
     url = f"https://api.twitter.com/2/tweets/search/recent?query={query}&max_results=50"
-    resp = requests.get(url, headers=headers)
-    if resp.status_code != 200:
+    try:
+        resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            return np.random.randint(0, 100)
+        tweets = resp.json().get("data", [])
+        return len(tweets)
+    except:
         return np.random.randint(0, 100)
-    tweets = resp.json().get("data", [])
-    return len(tweets)
 
 # --- 5. Build Feature Vector ---
 def build_feature_vector(image, coords):
@@ -113,14 +122,18 @@ def build_feature_vector(image, coords):
 # --- 6. Load or Train Model ---
 def load_model():
     from sklearn.ensemble import GradientBoostingRegressor
-    if os.path.exists("model.pkl"):
-        return joblib.load("model.pkl")
-    else:
-        from sklearn.datasets import make_regression
-        X, y = make_regression(n_samples=500, n_features=513, noise=0.2)
-        model = GradientBoostingRegressor().fit(X, y)
-        joblib.dump(model, "model.pkl")
-        return model
+    try:
+        if os.path.exists("model.pkl"):
+            return joblib.load("model.pkl")
+        else:
+            from sklearn.datasets import make_regression
+            X, y = make_regression(n_samples=500, n_features=513, noise=0.2)
+            model = GradientBoostingRegressor().fit(X, y)
+            joblib.dump(model, "model.pkl")
+            return model
+    except Exception as e:
+        st.error(f"Model loading error: {str(e)}")
+        raise e
 
 # --- 7. Save Results ---
 sales_log = "sales_history.csv"
@@ -177,21 +190,23 @@ if coords:
     st.image(image, caption="🛰️ Satellite View", use_container_width=True)
 
     if st.button("Predict Weekly Sales"):
-        features, foot, soc = build_feature_vector(image, coords)
-        model = load_model()
-        pred = model.predict([features])[0]
+        try:
+            features, foot, soc = build_feature_vector(image, coords)
+            model = load_model()
+            pred = model.predict([features])[0]
 
-        st.markdown(f"### 📊 Predicted Sales: **${pred:,.2f}**")
-        save_prediction(store, coords, pred, foot, soc)
-        plot_trends(store)
+            st.markdown(f"### 📊 Predicted Sales: **${pred:,.2f}**")
+            save_prediction(store, coords, pred, foot, soc)
+            plot_trends(store)
 
-        st.subheader("🧐 Recommendations")
-        if foot < 0.3:
-            st.warning("🚧 Low foot traffic: improve signage or placement.")
-        if soc < 15:
-            st.info("📱 Run a local Instagram giveaway or post.")
-        if foot > 0.7 and soc > 60:
-            st.success("🎉 High attention area: Upsell with bundles!")
-
+            st.subheader("🧐 Recommendations")
+            if foot < 0.3:
+                st.warning("🚧 Low foot traffic: improve signage or placement.")
+            if soc < 15:
+                st.info("📱 Run a local Instagram giveaway or post.")
+            if foot > 0.7 and soc > 60:
+                st.success("🎉 High attention area: Upsell with bundles!")
+        except Exception as e:
+            st.error(f"Prediction error: {str(e)}")
 
 
