@@ -1,4 +1,5 @@
 # --- Imports and Setup ---
+from sklearn.datasets import make_regression
 import streamlit as st
 import requests
 from PIL import Image
