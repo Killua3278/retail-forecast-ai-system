@@ -94,17 +94,17 @@ def extract_satellite_features(image):
 
 # --- 3. SafeGraph Foot Traffic API (mocked unless key provided) ---
 def get_safegraph_score(lat, lon):
-    return np.random.uniform(0, 1)
+    return np.random.uniform(0.3, 0.8)  # more realistic mock foot traffic
 
 # --- 4. Twitter v2 Social Sentiment ---
 def fetch_social_sentiment_v2(lat, lon):
-    return np.random.randint(0, 100)
+    return np.random.randint(30, 90)  # more realistic social buzz range
 
 # --- 5. Build Feature Vector ---
 def build_feature_vector(image, coords):
-    sat_features = extract_satellite_features(image)  # 512 features
-    foot_traffic = get_safegraph_score(*coords)       # 1 feature
-    social = fetch_social_sentiment_v2(*coords)       # 1 feature
+    sat_features = extract_satellite_features(image)
+    foot_traffic = get_safegraph_score(*coords)
+    social = fetch_social_sentiment_v2(*coords)
     return np.concatenate([sat_features, [foot_traffic, social]]), foot_traffic, social
 
 # --- 6. Load or Train Model ---
@@ -191,11 +191,17 @@ if coords:
 
             st.subheader("🧐 Recommendations")
             if foot < 0.3:
-                st.warning("🚧 Low foot traffic: improve signage or placement.")
-            if soc < 15:
-                st.info("📱 Run a local Instagram giveaway or post.")
-            if foot > 0.7 and soc > 60:
-                st.success("🎉 High attention area: Upsell with bundles!")
+                st.warning("🚧 Low foot traffic: try promoting limited-time deals or mobile ads targeting the area.")
+            elif foot > 0.7:
+                st.success("🏃 High footfall: consider pop-up stands or bundle promotions.")
+
+            if soc < 25:
+                st.info("📱 Low social buzz: run a local Instagram poll or invite influencers.")
+            elif soc > 70:
+                st.success("🔥 Trending: capitalize with hashtag campaigns or referral bonuses.")
+
+            if "taco" in store.lower():
+                st.markdown("🌮 **Taco Bell Popularity Insight:** Tacos and $5 Cravings Box are top sellers — stock up for peak hours!")
+
         except Exception as e:
             st.error(f"Prediction error: {str(e)}")
-
