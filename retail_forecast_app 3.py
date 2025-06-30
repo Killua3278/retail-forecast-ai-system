@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from streamlit_folium import st_folium
 import folium
 from dotenv import load_dotenv
+import torch.nn as nn
 
 # Load environment variables from .env if available
 load_dotenv()
@@ -62,9 +63,9 @@ def fetch_or_upload_satellite_image(coords):
         return Image.open(uploaded_file).convert("RGB")
 
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
-    if not api_key:
-        st.error("Google Maps API key is missing. Please set the GOOGLE_MAPS_API_KEY environment variable.")
-        return Image.new("RGB", (512, 512), color=(255, 255, 255))
+    if not api_key or api_key.startswith("AIzaSyD-Your"):
+        st.warning("Google Maps API key is missing or invalid. Using fallback image.")
+        return Image.new("RGB", (512, 512), color=(128, 128, 128))
 
     url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key={api_key}"
     try:
@@ -73,15 +74,13 @@ def fetch_or_upload_satellite_image(coords):
         return Image.open(io.BytesIO(response.content)).convert("RGB")
     except Exception as e:
         st.error(f"Failed to load satellite image: {str(e)}")
-        return Image.new("RGB", (512, 512), color=(255, 255, 255))
+        return Image.new("RGB", (512, 512), color=(128, 128, 128))
 
 # --- 2. Extract Vision Features ---
-import torch.nn as nn
-
 def extract_satellite_features(image):
     model = resnet18(pretrained=True)
     model.eval()
-    model = nn.Sequential(*list(model.children())[:-1])  # remove last fc layer
+    model = nn.Sequential(*list(model.children())[:-1])
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -89,51 +88,35 @@ def extract_satellite_features(image):
     tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
         features = model(tensor)
-        features = features.view(features.size(0), -1)  # flatten to (1,512)
+        features = features.view(features.size(0), -1)
     return features.numpy().flatten()
-
 
 # --- 3. SafeGraph Foot Traffic API (mocked unless key provided) ---
 def get_safegraph_score(lat, lon):
-    safegraph_key = os.getenv("SAFEGRAPH_API_KEY")
-    if not safegraph_key:
-        return np.random.uniform(0, 1)
     return np.random.uniform(0, 1)
 
 # --- 4. Twitter v2 Social Sentiment ---
 def fetch_social_sentiment_v2(lat, lon):
-    twitter_bearer_token = os.getenv("TWITTER_BEARER")
-    if not twitter_bearer_token:
-        return np.random.randint(0, 100)
-    headers = {"Authorization": f"Bearer {twitter_bearer_token}"}
-    query = f"point_radius:[{lon} {lat} 1km] -is:retweet lang:en"
-    url = f"https://api.twitter.com/2/tweets/search/recent?query={query}&max_results=50"
-    try:
-        resp = requests.get(url, headers=headers)
-        if resp.status_code != 200:
-            return np.random.randint(0, 100)
-        tweets = resp.json().get("data", [])
-        return len(tweets)
-    except:
-        return np.random.randint(0, 100)
+    return np.random.randint(0, 100)
 
 # --- 5. Build Feature Vector ---
 def build_feature_vector(image, coords):
     sat_features = extract_satellite_features(image)  # 512 features
-    foot_traffic = get_safegraph_score(*coords)      # 1 feature
-    social = fetch_social_sentiment_v2(*coords)      # 1 feature
+    foot_traffic = get_safegraph_score(*coords)       # 1 feature
+    social = fetch_social_sentiment_v2(*coords)       # 1 feature
     return np.concatenate([sat_features, [foot_traffic, social]]), foot_traffic, social
-
 
 # --- 6. Load or Train Model ---
 def load_model():
     from sklearn.ensemble import GradientBoostingRegressor
     try:
         if os.path.exists("model.pkl"):
-            return joblib.load("model.pkl")
+            model = joblib.load("model.pkl")
+            if hasattr(model, 'n_features_in_') and model.n_features_in_ != 514:
+                raise ValueError(f"Loaded model expects {model.n_features_in_} features, but app is providing 514.")
+            return model
         else:
-            from sklearn.datasets import make_regression
-            X, y = make_regression(n_samples=500, n_features=513, noise=0.2)
+            X, y = make_regression(n_samples=100, n_features=514, noise=0.2)
             model = GradientBoostingRegressor().fit(X, y)
             joblib.dump(model, "model.pkl")
             return model
@@ -214,5 +197,4 @@ if coords:
                 st.success("🎉 High attention area: Upsell with bundles!")
         except Exception as e:
             st.error(f"Prediction error: {str(e)}")
-
 
