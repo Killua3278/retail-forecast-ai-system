@@ -143,7 +143,7 @@ def plot_trends(store):
         st.info("No historical data yet.")
         return
     df = pd.read_csv(sales_log)
-           df = df[df["store"].astype(str).str.lower() == store.lower()]
+    df = df[df["store"].astype(str).str.lower() == store.lower()]
     if df.empty:
         st.info("No data for this store.")
         return
@@ -205,3 +205,4 @@ if coords:
 
         except Exception as e:
             st.error(f"Prediction error: {str(e)}")
+
