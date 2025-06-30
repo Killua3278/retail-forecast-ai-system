@@ -1,3 +1,6 @@
+# ✅ Enhanced Version of Retail Store Forecast Platform
+# Includes smarter use of store_type and store name, richer recommendations, modern look, and insights.
+
 # --- Imports and Setup ---
 from sklearn.datasets import make_regression
 import streamlit as st
@@ -15,10 +18,11 @@ import folium
 from dotenv import load_dotenv
 import torch.nn as nn
 
-# Load environment variables from .env if available
 load_dotenv()
 
 # --- Sidebar Config ---
+st.set_page_config(page_title="Retail Forecast AI", layout="wide")
+
 st.sidebar.title("⚙️ Settings")
 store_type = st.sidebar.selectbox("Store Type", ["Any", "Coffee Shop", "Boutique", "Fast Food", "Other"])
 theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=0)
@@ -30,15 +34,27 @@ def set_theme():
     if st.session_state.dark_mode:
         st.markdown("""
             <style>
-            .main { background-color: #121212; color: #e0e0e0; }
-            .stButton>button { background-color: #333; color: white; }
-            .sidebar .sidebar-content { background-color: #1e1e1e; color: #ddd; }
+            body, .main, .block-container, .sidebar .sidebar-content {
+                background-color: #121212 !important;
+                color: #e0e0e0 !important;
+            }
+            .stButton>button {
+                background-color: #4CAF50;
+                color: white;
+            }
             </style>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
             <style>
-            .main, .sidebar .sidebar-content { background-color: white; color: black; }
+            body, .main, .block-container, .sidebar .sidebar-content {
+                background-color: white !important;
+                color: black !important;
+            }
+            .stButton>button {
+                background-color: #f0f0f0;
+                color: black;
+            }
             </style>
         """, unsafe_allow_html=True)
 set_theme()
@@ -48,36 +64,33 @@ if st.sidebar.button("Clear Sales History"):
         os.remove("sales_history.csv")
         st.sidebar.success("Sales history cleared!")
 
-# --- Imports for vision ---
+# --- Vision Imports ---
 try:
     from torchvision import transforms
     from torchvision.models import resnet18
 except ModuleNotFoundError as e:
-    st.error("Required module 'torchvision' not found. Please add it to requirements.txt:")
-    st.code("torchvision")
+    st.error("Please install 'torchvision' in requirements.txt")
     raise e
 
-# --- 1. Upload or Fetch Satellite Image ---
+# --- Fetch or Upload Image ---
 def fetch_or_upload_satellite_image(coords):
-    uploaded_file = st.file_uploader("Or upload a satellite image", type=["jpg", "jpeg", "png"])
+    uploaded_file = st.file_uploader("Upload satellite image", type=["jpg", "jpeg", "png"])
     if uploaded_file:
         return Image.open(uploaded_file).convert("RGB")
-
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
-    if not api_key or api_key.startswith("AIzaSyD-Your"):
-        st.warning("Google Maps API key is missing or invalid. Using fallback image.")
-        return Image.new("RGB", (512, 512), color=(128, 128, 128))
-
-    url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key={api_key}"
+    if not api_key:
+        st.warning("No valid Google Maps API key found. Showing placeholder.")
+        return Image.new("RGB", (512, 512), color=(150, 150, 150))
     try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return Image.open(io.BytesIO(response.content)).convert("RGB")
+        url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key={api_key}"
+        r = requests.get(url)
+        r.raise_for_status()
+        return Image.open(io.BytesIO(r.content)).convert("RGB")
     except Exception as e:
-        st.error(f"Failed to load satellite image: {str(e)}")
-        return Image.new("RGB", (512, 512), color=(128, 128, 128))
+        st.error(f"Satellite fetch error: {e}")
+        return Image.new("RGB", (512, 512), color=(200, 200, 200))
 
-# --- 2. Extract Vision Features ---
+# --- Extract Features from Satellite ---
 def extract_satellite_features(image):
     model = resnet18(pretrained=True)
     model.eval()
@@ -88,121 +101,116 @@ def extract_satellite_features(image):
     ])
     tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
-        features = model(tensor)
-        features = features.view(features.size(0), -1)
+        features = model(tensor).view(1, -1)
     return features.numpy().flatten()
 
-# --- 3. SafeGraph Foot Traffic API (mocked unless key provided) ---
+# --- Mocked APIs ---
 def get_safegraph_score(lat, lon):
-    return np.random.uniform(0.3, 0.8)  # more realistic mock foot traffic
+    return np.random.uniform(0.3, 0.85)
 
-# --- 4. Twitter v2 Social Sentiment ---
 def fetch_social_sentiment_v2(lat, lon):
-    return np.random.randint(30, 90)  # more realistic social buzz range
+    return np.random.randint(30, 100)
 
-# --- 5. Build Feature Vector ---
+# --- Feature Construction ---
 def build_feature_vector(image, coords):
-    sat_features = extract_satellite_features(image)
-    foot_traffic = get_safegraph_score(*coords)
+    vision = extract_satellite_features(image)
+    foot = get_safegraph_score(*coords)
     social = fetch_social_sentiment_v2(*coords)
-    return np.concatenate([sat_features, [foot_traffic, social]]), foot_traffic, social
+    return np.concatenate([vision, [foot, social]]), foot, social
 
-# --- 6. Load or Train Model ---
+# --- Model ---
 def load_model():
     from sklearn.ensemble import GradientBoostingRegressor
-    try:
-        if os.path.exists("model.pkl"):
-            model = joblib.load("model.pkl")
-            if hasattr(model, 'n_features_in_') and model.n_features_in_ != 514:
-                raise ValueError(f"Loaded model expects {model.n_features_in_} features, but app is providing 514.")
-            return model
-        else:
-            X, y = make_regression(n_samples=100, n_features=514, noise=0.2)
-            model = GradientBoostingRegressor().fit(X, y)
-            joblib.dump(model, "model.pkl")
-            return model
-    except Exception as e:
-        st.error(f"Model loading error: {str(e)}")
-        raise e
+    if os.path.exists("model.pkl"):
+        model = joblib.load("model.pkl")
+        if hasattr(model, 'n_features_in_') and model.n_features_in_ != 514:
+            raise ValueError("Model feature mismatch.")
+        return model
+    X, y = make_regression(n_samples=100, n_features=514, noise=0.1)
+    model = GradientBoostingRegressor().fit(X, y)
+    joblib.dump(model, "model.pkl")
+    return model
 
-# --- 7. Save Results ---
+# --- Logging ---
 sales_log = "sales_history.csv"
 def save_prediction(store, coords, pred, foot, soc):
-    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc]],
-                      columns=["store", "lat", "lon", "type", "sales", "foot", "social"])
+    row = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc]],
+                       columns=["store", "lat", "lon", "type", "sales", "foot", "social"])
     if os.path.exists(sales_log):
-        old = pd.read_csv(sales_log)
-        new = pd.concat([old, df], ignore_index=True)
+        past = pd.read_csv(sales_log)
+        new = pd.concat([past, row], ignore_index=True)
     else:
-        new = df
+        new = row
     new.to_csv(sales_log, index=False)
 
-# --- 8. Graph Trends ---
+# --- Graph ---
 def plot_trends(store):
     if not os.path.exists(sales_log):
-        st.info("No historical data yet.")
-        return
+        return st.info("No data to display yet.")
     df = pd.read_csv(sales_log)
     df = df[df["store"].astype(str).str.lower() == store.lower()]
     if df.empty:
-        st.info("No data for this store.")
-        return
+        return st.info("No data found for that store name.")
     df["timestamp"] = pd.date_range(end=pd.Timestamp.today(), periods=len(df))
-    df = df.sort_values("timestamp")
-    plt.figure(figsize=(10, 4))
-    plt.plot(df["timestamp"], df["sales"], label="Sales")
-    plt.plot(df["timestamp"], df["foot"] * 1000, label="Foot Traffic (scaled)")
-    plt.plot(df["timestamp"], df["social"] * 10, label="Social Buzz (scaled)")
-    plt.legend()
-    plt.grid(True)
-    st.pyplot(plt)
+    st.line_chart(df.set_index("timestamp")["sales"], use_container_width=True)
+    st.area_chart(df.set_index("timestamp")[["foot", "social"]], use_container_width=True)
 
-# --- 9. Map Selection ---
+# --- Map ---
 def get_coords_from_map():
-    st.subheader("🌍 Select Store Location on Map")
-    m = folium.Map(location=[40.7128, -74.0060], zoom_start=11)
-    loc_marker = folium.LatLngPopup()
-    m.add_child(loc_marker)
-    output = st_folium(m, height=300, width=700)
-    if output.get("last_clicked"):
-        coords = (output["last_clicked"]["lat"], output["last_clicked"]["lng"])
-        st.success(f"Selected Location: {coords}")
+    st.subheader("📍 Select Your Store's Location")
+    m = folium.Map(location=[40.7128, -74.0060], zoom_start=12)
+    m.add_child(folium.LatLngPopup())
+    out = st_folium(m, height=300, width=700)
+    if out.get("last_clicked"):
+        coords = (out["last_clicked"]["lat"], out["last_clicked"]["lng"])
+        st.success(f"Location selected: {coords}")
         return coords
     return None
 
-# --- Main Interface ---
-st.title("🏣 Retail Store Forecast Platform")
-store = st.text_input("🏥 Store Name")
+# --- Interface ---
+st.title("📊 Retail Forecast & Insight Engine")
+store = st.text_input("🏬 Enter Store Name")
 coords = get_coords_from_map()
 
 if coords:
     image = fetch_or_upload_satellite_image(coords)
-    st.image(image, caption="🛰️ Satellite View", use_container_width=True)
+    st.image(image, caption="Satellite View", use_container_width=True)
 
-    if st.button("Predict Weekly Sales"):
+    if st.button("🔮 Predict Weekly Sales"):
         try:
             features, foot, soc = build_feature_vector(image, coords)
             model = load_model()
             pred = model.predict([features])[0]
 
-            st.markdown(f"### 📊 Predicted Sales: **${pred:,.2f}**")
+            st.markdown(f"## 💰 Estimated Weekly Sales: **${pred:,.2f}**")
             save_prediction(store, coords, pred, foot, soc)
             plot_trends(store)
 
-            st.subheader("🧐 Recommendations")
-            if foot < 0.3:
-                st.warning("🚧 Low foot traffic: try promoting limited-time deals or mobile ads targeting the area.")
-            elif foot > 0.7:
-                st.success("🏃 High footfall: consider pop-up stands or bundle promotions.")
+            # --- Recommendations ---
+            st.subheader("📌 Strategic Recommendations")
+            recs = []
+            if foot < 0.4:
+                recs.append("👣 Low foot traffic — improve signage, run geo-targeted mobile ads.")
+            elif foot > 0.75:
+                recs.append("💥 High foot traffic — use sidewalk promos and flash deals.")
 
-            if soc < 25:
-                st.info("📱 Low social buzz: run a local Instagram poll or invite influencers.")
-            elif soc > 70:
-                st.success("🔥 Trending: capitalize with hashtag campaigns or referral bonuses.")
+            if soc < 35:
+                recs.append("📱 Low social buzz — host a giveaway or collab with local influencers.")
+            elif soc > 80:
+                recs.append("🔥 High social buzz — push limited drops or referral bonuses now!")
 
             if "taco" in store.lower():
-                st.markdown("🌮 **Taco Bell Popularity Insight:** Tacos and $5 Cravings Box are top sellers — stock up for peak hours!")
+                recs.append("🌮 Best seller tip: stock $5 boxes, promote late-night combo deals.")
+            elif store_type == "Coffee Shop":
+                recs.append("☕ Offer loyalty cards & post seasonal drinks on IG reels.")
+            elif store_type == "Boutique":
+                recs.append("🛍️ Feature a 'look of the week' window display to convert foot traffic.")
+            elif store_type == "Fast Food":
+                recs.append("🍟 Test combo upgrades and upsell high-margin items like beverages.")
+
+            for r in recs:
+                st.markdown(f"- {r}")
 
         except Exception as e:
-            st.error(f"Prediction error: {str(e)}")
+            st.error(f"Prediction failed: {e}")
 
