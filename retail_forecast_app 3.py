@@ -15,15 +15,13 @@ import folium
 from dotenv import load_dotenv
 import torch.nn as nn
 from geopy.geocoders import Nominatim
-import plotly.express as px
 
-# Load environment variables
+# Load environment variables from .env if available
 load_dotenv()
 
-# --- Config ---
-st.set_page_config(page_title="Retail AI Dashboard", layout="wide")
+# --- Sidebar Config ---
+st.set_page_config(page_title="Retail Forecast AI", layout="wide")
 
-# --- Sidebar ---
 st.sidebar.title("⚙️ Settings")
 store_type = st.sidebar.selectbox("Store Type", ["Any", "Coffee Shop", "Boutique", "Fast Food", "Other"])
 theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=0)
@@ -64,34 +62,33 @@ def set_theme():
         </style>""", unsafe_allow_html=True)
 set_theme()
 
-# --- Load Vision Model ---
+# --- Imports for vision ---
 try:
     from torchvision import transforms
     from torchvision.models import resnet18
 except ModuleNotFoundError as e:
-    st.error("Install torchvision in requirements.txt")
+    st.error("Please install 'torchvision' in requirements.txt")
     raise e
 
-# --- Helper: Satellite Image Fetch ---
+# --- 1. Upload or Fetch Satellite Image ---
 def fetch_or_upload_satellite_image(coords):
     uploaded_file = st.file_uploader("Upload satellite image", type=["jpg", "jpeg", "png"])
     if uploaded_file:
         return Image.open(uploaded_file).convert("RGB")
-
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if not api_key:
-        st.warning("Missing Google Maps API Key. Showing placeholder.")
+        st.warning("No valid Google Maps API key found. Showing placeholder.")
         return Image.new("RGB", (512, 512), color=(150, 150, 150))
-
     try:
         url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key={api_key}"
         r = requests.get(url)
         r.raise_for_status()
         return Image.open(io.BytesIO(r.content)).convert("RGB")
-    except:
+    except Exception as e:
+        st.error(f"Satellite fetch error: {e}")
         return Image.new("RGB", (512, 512), color=(200, 200, 200))
 
-# --- Helper: Vision Model Feature Extraction ---
+# --- 2. Extract Vision Features ---
 def extract_satellite_features(image):
     model = resnet18(pretrained=True)
     model.eval()
@@ -105,26 +102,21 @@ def extract_satellite_features(image):
         features = model(tensor).view(1, -1)
     return features.numpy().flatten()
 
-# --- APIs ---
+# --- Mocked APIs ---
 def get_safegraph_score(lat, lon):
     return np.random.uniform(0.3, 0.85)
 
 def fetch_social_sentiment(lat, lon):
     return np.random.randint(30, 100)
 
-# --- Geolocation from Store Name ---
-def get_coordinates_from_name(store_name):
-    geolocator = Nominatim(user_agent="store_locator")
-    location = geolocator.geocode(store_name)
-    return (location.latitude, location.longitude) if location else None
-
-# --- Features + Model ---
+# --- Feature Construction ---
 def build_feature_vector(image, coords):
     vision = extract_satellite_features(image)
     foot = get_safegraph_score(*coords)
     social = fetch_social_sentiment(*coords)
     return np.concatenate([vision, [foot, social]]), foot, social
 
+# --- Model ---
 def load_model():
     from sklearn.ensemble import GradientBoostingRegressor
     if os.path.exists("model.pkl"):
@@ -149,47 +141,51 @@ def save_prediction(store, coords, pred, foot, soc):
         new = row
     new.to_csv(sales_log, index=False)
 
-# --- Insights + Graphs ---
+# --- Graph + Competitor Insight ---
 def plot_trends(store):
     if not os.path.exists(sales_log):
-        st.info("No historical data available.")
-        return
+        return st.info("No data to display yet.")
     df = pd.read_csv(sales_log)
     df = df[df["store"].astype(str).str.lower() == store.lower()]
     if df.empty:
-        st.info("No data found for that store.")
-        return
+        return st.info("No data found for that store name.")
     df["timestamp"] = pd.date_range(end=pd.Timestamp.today(), periods=len(df))
-    st.plotly_chart(px.line(df, x="timestamp", y="sales", title="Sales Over Time"), use_container_width=True)
-    st.plotly_chart(px.bar(df, x="timestamp", y=["foot", "social"], title="Foot Traffic & Social Buzz"), use_container_width=True)
+    st.line_chart(df.set_index("timestamp")["sales"], use_container_width=True)
+    st.area_chart(df.set_index("timestamp")[["foot", "social"]], use_container_width=True)
+    
+    all_df = pd.read_csv(sales_log)
+    group_avg = all_df.groupby("type")["sales"].mean().reset_index()
+    st.bar_chart(group_avg.set_index("type"))
 
-    comp = pd.read_csv(sales_log)
-    comp_group = comp.groupby("type")["sales"].mean().reset_index()
-    st.plotly_chart(px.bar(comp_group, x="type", y="sales", title="Category Benchmark: Avg Weekly Sales"), use_container_width=True)
+# --- Geolocation from Store Name ---
+def get_coords_from_store_name(name):
+    geolocator = Nominatim(user_agent="retail_app")
+    try:
+        loc = geolocator.geocode(name)
+        if loc:
+            return (loc.latitude, loc.longitude)
+    except:
+        pass
+    return None
 
-# --- Map ---
+# --- Map UI ---
 def get_coords_from_map():
-    st.subheader("📍 Select or Auto-Detect Store Location")
+    st.subheader("📍 Select Your Store's Location")
     m = folium.Map(location=[40.7128, -74.0060], zoom_start=11)
     m.add_child(folium.LatLngPopup())
     out = st_folium(m, height=300, width=700)
     if out.get("last_clicked"):
         coords = (out["last_clicked"]["lat"], out["last_clicked"]["lng"])
-        st.success(f"Location Selected: {coords}")
+        st.success(f"Location selected: {coords}")
         return coords
     return None
 
-# --- Interface ---
+# --- Main App ---
 st.title("📊 Retail Forecast & Insight Engine")
 store = st.text_input("🏬 Enter Store Name")
-
-coords = get_coords_from_map()
-if not coords and store:
-    coords = get_coordinates_from_name(store)
-    if coords:
-        st.info(f"📌 Location auto-detected: {coords}")
-    else:
-        st.warning("❗ Could not auto-detect location from store name.")
+coords = get_coords_from_store_name(store) if store else None
+if not coords:
+    coords = get_coords_from_map()
 
 if coords:
     image = fetch_or_upload_satellite_image(coords)
@@ -205,31 +201,30 @@ if coords:
             save_prediction(store, coords, pred, foot, soc)
             plot_trends(store)
 
-            # --- Recommendations ---
-            st.subheader("📌 Actionable Recommendations")
+            st.subheader("📌 Strategic Recommendations")
             recs = []
             if foot < 0.4:
-                recs.append("👣 Low foot traffic — try local billboard or sidewalk signage.")
+                recs.append("👣 Low foot traffic — improve signage, run geo-targeted mobile ads.")
             elif foot > 0.75:
-                recs.append("🏃‍♂️ Heavy footfall — try bundle deals or flash sales.")
+                recs.append("💥 High foot traffic — use sidewalk promos and flash deals.")
 
-            if soc < 40:
-                recs.append("📱 Increase local engagement via influencer collabs or polls.")
+            if soc < 35:
+                recs.append("📱 Low social buzz — host a giveaway or collab with local influencers.")
             elif soc > 80:
-                recs.append("🔥 Use social buzz to launch limited-time offers.")
-
-            if store_type == "Coffee Shop":
-                recs.append("☕ Consider early-bird combos and Instagram-worthy drink visuals.")
-            elif store_type == "Fast Food":
-                recs.append("🍔 Push value meals and upsell high-margin drinks.")
-            elif store_type == "Boutique":
-                recs.append("👗 Use limited drops, promote styling reels, and loyalty perks.")
+                recs.append("🔥 High social buzz — push limited drops or referral bonuses now!")
 
             if "taco" in store.lower():
-                recs.append("🌮 Best Seller Tip: Stock $5 cravings boxes and late-night specials.")
+                recs.append("🌮 Best seller tip: stock $5 boxes, promote late-night combo deals.")
+            elif store_type == "Coffee Shop":
+                recs.append("☕ Offer loyalty cards & post seasonal drinks on IG reels.")
+            elif store_type == "Boutique":
+                recs.append("🛍️ Feature a 'look of the week' window display to convert foot traffic.")
+            elif store_type == "Fast Food":
+                recs.append("🍟 Test combo upgrades and upsell high-margin items like beverages.")
 
             for r in recs:
                 st.markdown(f"- {r}")
 
         except Exception as e:
             st.error(f"Prediction failed: {e}")
+
