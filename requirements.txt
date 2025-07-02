@@ -9,3 +9,4 @@ streamlit-folium
 matplotlib
 python-dotenv
 scikit-learn
+geopy
