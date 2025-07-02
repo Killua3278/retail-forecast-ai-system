@@ -112,6 +112,7 @@ def load_model():
             raise ValueError("Model mismatch with features")
         return model
     X, y = make_regression(n_samples=100, n_features=514, noise=0.1)
+    y = np.abs(y)
     model = GradientBoostingRegressor().fit(X, y)
     joblib.dump(model, "model.pkl")
     return model
@@ -153,19 +154,20 @@ def plot_insights(store):
     total = pd.read_csv("sales_history.csv")
     avg_type = total.groupby("type")["sales"].mean().reset_index()
     st.plotly_chart(px.bar(avg_type, x="type", y="sales", title="Avg Sales by Store Type"))
+    st.plotly_chart(px.pie(df, names="type", values="sales", title="Store Type Distribution"))
 
 # --- App ---
-st.title("📈 Retail AI: Forecast & Strategy Tool")
+st.title("📈 Retail AI: Forecast, Benchmarking & Strategy")
 store = st.text_input("🏪 Store Name (e.g. Taco Bell Robbinsville)")
 coords = None
 
 if store:
     candidates = get_coords_from_store_name(store)
     if candidates:
-        st.success("Found multiple matches. Pick one below:")
+        st.success("Pick your exact store from below:")
         coords = show_map_with_selection(candidates)
     else:
-        st.warning("Could not locate store. Use map to pick.")
+        st.warning("Could not geolocate. Please pick on map below.")
 
 if not coords:
     coords = show_map_with_selection([(40.7128, -74.0060, "New York (default)")])
@@ -174,34 +176,37 @@ if coords:
     image = fetch_or_upload_satellite_image(coords)
     st.image(image, caption="🛰️ Satellite View", use_container_width=True)
 
-    if st.button("📊 Predict Sales & Analyze"):
+    if st.button("📊 Predict & Analyze"):
         try:
             features, foot, soc = build_feature_vector(image, coords)
             model = load_model()
-            pred = model.predict([features])[0]
-            st.markdown(f"## 💰 Weekly Sales Estimate: **${pred:,.2f}**")
+            pred = max(model.predict([features])[0], 0)
+            st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}**")
             save_prediction(store, coords, pred, foot, soc)
             plot_insights(store)
 
-            st.subheader("🧠 Actionable Strategy & Inventory Advice")
+            st.subheader("📦 Actionable Strategy & Inventory Advice")
             recs = []
             if foot < 0.4:
-                recs.append("👣 Low footfall: Distribute flyers and use Waze/Google Ads.")
+                recs.append("🛑 Low traffic: Offer in-store exclusive deals + signage visibility upgrades.")
+            elif foot > 0.7:
+                recs.append("🚦 High traffic: Consider fast checkout stations or bundle pricing.")
             if soc < 35:
-                recs.append("📉 Low social traction: Spark engagement via contests.")
-            if foot > 0.7 and soc > 80:
-                recs.append("🚀 High buzz & traffic: Push exclusive combos and fast service.")
+                recs.append("📉 Low buzz: Start TikTok or Reels challenges tagged locally.")
+            elif soc > 70:
+                recs.append("🔥 Trending: Leverage influencer promo codes for new customers.")
 
-            if store_type == "Coffee Shop":
-                recs.append("☕ Stock seasonal lattes and upsell via TikTok reels.")
-            if store_type == "Fast Food":
-                recs.append("🍟 Peak hours? Batch prep fries & drinks. Promote combos.")
-            if "popeyes" in store.lower():
-                recs.append("🐔 Inventory tip: Stock spicy tenders on weekends!")
+            if store_type == "Fast Food" or "taco" in store.lower():
+                recs.append("🌮 Taco Insight: Boost inventory for beef/chicken combo SKUs Fri-Sun.")
+                recs.append("📊 Popular hours: 11:30am–1pm & 6pm–8pm — plan staff accordingly.")
+                recs.append("📦 Consider pre-packing popular $5 box items to reduce order time.")
+
+            if not recs:
+                recs.append("🧠 Tip: Add loyalty punch card + QR-based feedback system.")
 
             for r in recs:
                 st.markdown(f"- {r}")
 
         except Exception as e:
-            st.error(f"🚫 Prediction Failed: {e}")
+            st.error(f"Prediction failed: {e}")
 
