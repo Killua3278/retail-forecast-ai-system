@@ -11,3 +11,4 @@ Pillow
 folium
 python-dotenv
 geopy
+streamlit-folium
