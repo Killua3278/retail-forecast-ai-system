@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 import torch.nn as nn
 from geopy.geocoders import Nominatim
 from sklearn.ensemble import GradientBoostingRegressor
+load_model = load_real_data_model
 
 load_dotenv()
 
