@@ -1,23 +1,17 @@
 import pandas as pd
 import numpy as np
 
-# --- Configuration ---
-num_samples = 10
-num_features = 512
+# --- Generate mock real_sales_data.csv with 512 features + lat/lon + sales ---
+def generate_valid_real_data_csv(filepath="real_sales_data.csv", num_rows=100):
+    feature_data = np.random.rand(num_rows, 512)
+    lat_lon = np.random.uniform(low=[25, -125], high=[49, -66], size=(num_rows, 2))  # USA lat/lon
+    sales = np.random.randint(5000, 50000, size=(num_rows, 1))
 
-# --- Generate dummy features (f0 to f511) ---
-data = {
-    f"f{i}": np.random.rand(num_samples) * 100 for i in range(num_features)
-}
+    data = np.hstack([feature_data, lat_lon, sales])
+    columns = [f"f{i}" for i in range(512)] + ["lat", "lon", "sales"]
+    df = pd.DataFrame(data, columns=columns)
+    df.to_csv(filepath, index=False)
 
-# --- Add lat, lon, and sales columns ---
-data["lat"] = np.random.uniform(25.0, 50.0, size=num_samples)   # USA latitude range
-data["lon"] = np.random.uniform(-125.0, -70.0, size=num_samples)  # USA longitude range
-data["sales"] = np.random.uniform(1000, 50000, size=num_samples)
+# Call this once to regenerate a clean, valid CSV file
+generate_valid_real_data_csv()
 
-# --- Convert to DataFrame ---
-df = pd.DataFrame(data)
-
-# --- Save as real_sales_data.csv ---
-df.to_csv("real_sales_data.csv", index=False)
-print("✅ real_sales_data.csv created with shape:", df.shape)
