@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 import torch.nn as nn
 from geopy.geocoders import Nominatim
 from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.dummy import DummyRegressor 
 
 
 load_dotenv()
@@ -210,6 +211,18 @@ if coords:
             st.error(f"Prediction failed: {e}")
 
 # --- Real Dataset Training Integration ---
+...
+# (Keep everything before this unchanged)
+
+# --- Model loading and fallback ---
+
+ # Add this import near the top
+
+def load_fallback_model():
+    dummy = DummyRegressor(strategy="mean")
+    dummy.fit([[0]*514], [0])  # 512 features + lat + lon
+    return dummy
+
 def load_real_data_model():
     real_data_path = "real_sales_data.csv"
     if os.path.exists("model.pkl"):
@@ -217,12 +230,12 @@ def load_real_data_model():
         return model
     if not os.path.exists(real_data_path):
         st.warning("Real dataset not found. Using fallback regression model.")
-        return load_model()
+        return load_fallback_model()
     df = pd.read_csv(real_data_path)
     expected_features = [f"f{i}" for i in range(512)] + ["lat", "lon"]
     if not all(col in df.columns for col in expected_features + ["sales"]):
         st.error("real_sales_data.csv must have 512 features (f0 to f511), lat, lon, and sales columns")
-        return load_model()
+        return load_fallback_model()
     X = df[expected_features]
     y = df["sales"]
     model = GradientBoostingRegressor()
@@ -231,5 +244,8 @@ def load_real_data_model():
     st.success("Real dataset-based model trained and loaded ✅")
     return model
 
-load_model = load_real_data_model
+load_model = load_real_data_model  # Put this AFTER both functions are defined
+
+...
+# (Keep everything after this unchanged)
 
