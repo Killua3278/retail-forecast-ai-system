@@ -15,6 +15,7 @@ import folium
 from dotenv import load_dotenv
 import torch.nn as nn
 from geopy.geocoders import Nominatim
+from sklearn.ensemble import GradientBoostingRegressor
 
 load_dotenv()
 
@@ -104,24 +105,13 @@ def build_feature_vector(img, coords):
         [get_safegraph_score(*coords), fetch_social_sentiment(*coords)]
     ]), get_safegraph_score(*coords), fetch_social_sentiment(*coords)
 
-def load_model():
-    from sklearn.ensemble import GradientBoostingRegressor
-    if os.path.exists("model.pkl"):
-        model = joblib.load("model.pkl")
-        if getattr(model, 'n_features_in_', 0) != 514:
-            raise ValueError("Model mismatch with features")
-        return model
-    X, y = make_regression(n_samples=100, n_features=514, noise=0.1)
-    y = np.abs(y * 100 + 25000)
-    model = GradientBoostingRegressor().fit(X, y)
-    joblib.dump(model, "model.pkl")
-    return model
-
 def get_coords_from_store_name(name):
-    geolocator = Nominatim(user_agent="retail_ai")
     try:
-        matches = geolocator.geocode(name, exactly_one=False, limit=3, addressdetails=True)
-        return [(m.latitude, m.longitude, m.address) for m in matches] if matches else []
+        url = f"https://nominatim.openstreetmap.org/search?q={requests.utils.quote(name)}&format=json&limit=3"
+        res = requests.get(url, headers={"User-Agent": "retail_ai_app"})
+        res.raise_for_status()
+        matches = res.json()
+        return [(float(m['lat']), float(m['lon']), m['display_name']) for m in matches]
     except:
         return []
 
@@ -134,8 +124,8 @@ def show_map_with_selection(options):
     return options[0][:2] if options else None
 
 def save_prediction(store, coords, pred, foot, soc):
-    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc]],
-                      columns=["store", "lat", "lon", "type", "sales", "foot", "social"])
+    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
+                      columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
     if os.path.exists("sales_history.csv"):
         old = pd.read_csv("sales_history.csv")
         df = pd.concat([old, df], ignore_index=True)
@@ -148,7 +138,7 @@ def plot_insights(store):
     df = df[df["store"].astype(str).str.lower() == store.lower()]
     if df.empty:
         return st.warning("No data found.")
-    df["timestamp"] = pd.date_range(end=pd.Timestamp.today(), periods=len(df))
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
     st.plotly_chart(px.line(df, x="timestamp", y="sales", title="Sales Over Time"))
     st.plotly_chart(px.area(df, x="timestamp", y=["foot", "social"], title="Foot Traffic & Social Buzz"))
     total = pd.read_csv("sales_history.csv")
@@ -170,24 +160,11 @@ def generate_recommendations(store, store_type, foot, soc, sales):
         recs.append("📱 Moderate buzz. Use hashtag campaigns and stories to boost daily engagement.")
     else:
         recs.append("📢 High buzz! Launch influencer deals or flash discounts to ride the momentum.")
-    store_lower = store.lower()
-    if "taco" in store_lower or "bell" in store_lower or store_type == "Fast Food":
+    if "taco" in store.lower() or "bell" in store.lower() or store_type == "Fast Food":
         recs.extend([
             "🌮 *Fast Food Strategy*: Stock popular items like Cravings Boxes and combo meals between 12–2pm & 6–8pm.",
             "📦 Use pre-prepared ingredients during peak hours to cut wait times.",
             "📊 Test digital order kiosks or loyalty app promotions."
-        ])
-    elif store_type == "Coffee Shop":
-        recs.extend([
-            "☕ Consider limited-time drinks to boost morning visits (8–10am).",
-            "💡 Partner with local bakeries for upsell combos.",
-            "📲 Encourage reviews via QR codes on cups to build community trust."
-        ])
-    elif store_type == "Boutique":
-        recs.extend([
-            "👜 Highlight new arrivals via Instagram reels or livestreams.",
-            "🎯 Run loyalty-based discounts for repeat customers.",
-            "📆 Organize a themed event or seasonal promo to increase footfall."
         ])
     if sales > 30000:
         recs.append("📈 Sales are strong! Evaluate expanding inventory or testing higher-margin products.")
@@ -214,7 +191,7 @@ if not coords:
 
 if coords:
     image = fetch_or_upload_satellite_image(coords)
-    st.image(image, caption="🛰️ Satellite View", use_container_width=True)
+    st.image(image, caption="🛋️ Satellite View", use_container_width=True)
 
     if st.button("📊 Predict & Analyze"):
         try:
@@ -224,7 +201,6 @@ if coords:
             st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}**")
             save_prediction(store, coords, pred, foot, soc)
             plot_insights(store)
-
             st.subheader("📦 Actionable Strategy & Inventory Advice")
             recs = generate_recommendations(store, store_type, foot, soc, pred)
             for r in recs:
@@ -232,90 +208,27 @@ if coords:
         except Exception as e:
             st.error(f"Prediction failed: {e}")
 
-# ✅ Added Smart Real Dataset Integration to Existing Code
-# Append this directly to the bottom of your current script
-
 # --- Real Dataset Training Integration ---
 def load_real_data_model():
     real_data_path = "real_sales_data.csv"
     if os.path.exists("model.pkl"):
         model = joblib.load("model.pkl")
         return model
-
     if not os.path.exists(real_data_path):
         st.warning("Real dataset not found. Using fallback regression model.")
-        return load_model()  # fallback dummy model
-
+        return load_model()
     df = pd.read_csv(real_data_path)
     expected_features = [f"f{i}" for i in range(512)] + ["lat", "lon"]
     if not all(col in df.columns for col in expected_features + ["sales"]):
         st.error("real_sales_data.csv must have 512 features (f0 to f511), lat, lon, and sales columns")
         return load_model()
-
     X = df[expected_features]
     y = df["sales"]
-
     model = GradientBoostingRegressor()
     model.fit(X, y)
     joblib.dump(model, "model.pkl")
     st.success("Real dataset-based model trained and loaded ✅")
     return model
 
-# Override previous model loader with this new real-data-powered one
 load_model = load_real_data_model
 
-# ✅ Append this to your existing code to fix graphs and improve realism
-
-# --- Fix save_prediction to include timestamp correctly ---
-def save_prediction(store, coords, pred, foot, soc):
-    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
-                      columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
-    if os.path.exists("sales_history.csv"):
-        old = pd.read_csv("sales_history.csv")
-        df = pd.concat([old, df], ignore_index=True)
-    df.to_csv("sales_history.csv", index=False)
-
-# --- Fix plot_insights to use real timestamp instead of artificial ---
-def plot_insights(store):
-    if not os.path.exists("sales_history.csv"):
-        return st.info("No data yet.")
-    df = pd.read_csv("sales_history.csv")
-    df = df[df["store"].astype(str).str.lower() == store.lower()]
-    if df.empty:
-        return st.warning("No data found.")
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    st.plotly_chart(px.line(df, x="timestamp", y="sales", title="Sales Over Time"))
-    st.plotly_chart(px.area(df, x="timestamp", y=["foot", "social"], title="Foot Traffic & Social Buzz"))
-    total = pd.read_csv("sales_history.csv")
-    avg_type = total.groupby("type")["sales"].mean().reset_index()
-    st.plotly_chart(px.bar(avg_type, x="type", y="sales", title="Avg Sales by Store Type"))
-    st.plotly_chart(px.pie(df, names="type", values="sales", title="Store Type Distribution"))
-
-# --- Optional: Override model loader if real data CSV exists ---
-def load_real_data_model():
-    real_data_path = "real_sales_data.csv"
-    if os.path.exists("model.pkl"):
-        model = joblib.load("model.pkl")
-        return model
-
-    if not os.path.exists(real_data_path):
-        st.warning("Real dataset not found. Using fallback regression model.")
-        return load_model()  # fallback dummy model
-
-    df = pd.read_csv(real_data_path)
-    expected_features = [f"f{i}" for i in range(512)] + ["lat", "lon"]
-    if not all(col in df.columns for col in expected_features + ["sales"]):
-        st.error("real_sales_data.csv must have 512 features (f0 to f511), lat, lon, and sales columns")
-        return load_model()
-
-    X = df[expected_features]
-    y = df["sales"]
-
-    model = GradientBoostingRegressor()
-    model.fit(X, y)
-    joblib.dump(model, "model.pkl")
-    st.success("Real dataset-based model trained and loaded ✅")
-    return model
-
-# ✅ Rebind the model loader function
-load_model = load_real_data_model
