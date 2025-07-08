@@ -263,3 +263,59 @@ def load_real_data_model():
 
 # Override previous model loader with this new real-data-powered one
 load_model = load_real_data_model
+
+# ✅ Append this to your existing code to fix graphs and improve realism
+
+# --- Fix save_prediction to include timestamp correctly ---
+def save_prediction(store, coords, pred, foot, soc):
+    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
+                      columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
+    if os.path.exists("sales_history.csv"):
+        old = pd.read_csv("sales_history.csv")
+        df = pd.concat([old, df], ignore_index=True)
+    df.to_csv("sales_history.csv", index=False)
+
+# --- Fix plot_insights to use real timestamp instead of artificial ---
+def plot_insights(store):
+    if not os.path.exists("sales_history.csv"):
+        return st.info("No data yet.")
+    df = pd.read_csv("sales_history.csv")
+    df = df[df["store"].astype(str).str.lower() == store.lower()]
+    if df.empty:
+        return st.warning("No data found.")
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    st.plotly_chart(px.line(df, x="timestamp", y="sales", title="Sales Over Time"))
+    st.plotly_chart(px.area(df, x="timestamp", y=["foot", "social"], title="Foot Traffic & Social Buzz"))
+    total = pd.read_csv("sales_history.csv")
+    avg_type = total.groupby("type")["sales"].mean().reset_index()
+    st.plotly_chart(px.bar(avg_type, x="type", y="sales", title="Avg Sales by Store Type"))
+    st.plotly_chart(px.pie(df, names="type", values="sales", title="Store Type Distribution"))
+
+# --- Optional: Override model loader if real data CSV exists ---
+def load_real_data_model():
+    real_data_path = "real_sales_data.csv"
+    if os.path.exists("model.pkl"):
+        model = joblib.load("model.pkl")
+        return model
+
+    if not os.path.exists(real_data_path):
+        st.warning("Real dataset not found. Using fallback regression model.")
+        return load_model()  # fallback dummy model
+
+    df = pd.read_csv(real_data_path)
+    expected_features = [f"f{i}" for i in range(512)] + ["lat", "lon"]
+    if not all(col in df.columns for col in expected_features + ["sales"]):
+        st.error("real_sales_data.csv must have 512 features (f0 to f511), lat, lon, and sales columns")
+        return load_model()
+
+    X = df[expected_features]
+    y = df["sales"]
+
+    model = GradientBoostingRegressor()
+    model.fit(X, y)
+    joblib.dump(model, "model.pkl")
+    st.success("Real dataset-based model trained and loaded ✅")
+    return model
+
+# ✅ Rebind the model loader function
+load_model = load_real_data_model
