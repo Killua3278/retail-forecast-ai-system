@@ -18,7 +18,6 @@ from geopy.geocoders import Nominatim
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.dummy import DummyRegressor 
 
-
 load_dotenv()
 
 # --- Page Setup ---
@@ -32,7 +31,7 @@ theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=0)
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = (theme == "Dark")
 
-if st.sidebar.button("🧹 Clear Sales History"):
+if st.sidebar.button("🪹 Clear Sales History"):
     if os.path.exists("sales_history.csv"):
         os.remove("sales_history.csv")
         st.sidebar.success("History cleared.")
@@ -109,11 +108,11 @@ def build_feature_vector(img, coords):
 
 def get_coords_from_store_name(name):
     try:
-        url = f"https://nominatim.openstreetmap.org/search?q={requests.utils.quote(name)}&format=json&limit=3"
-        res = requests.get(url, headers={"User-Agent": "retail_ai_app"})
-        res.raise_for_status()
-        matches = res.json()
-        return [(float(m['lat']), float(m['lon']), m['display_name']) for m in matches]
+        geolocator = Nominatim(user_agent="retail_ai_locator")
+        location = geolocator.geocode(name)
+        if location:
+            return [(location.latitude, location.longitude, location.address)]
+        return []
     except:
         return []
 
@@ -175,6 +174,35 @@ def generate_recommendations(store, store_type, foot, soc, sales):
     recs.append("🧠 Pro Tip: Use customer purchase history (even manually tracked) to promote repeat buying patterns.")
     return recs
 
+# --- Model loading and fallback ---
+def load_fallback_model():
+    dummy = DummyRegressor(strategy="mean")
+    dummy.fit([[0]*514], [0])  # 512 features + lat + lon
+    return dummy
+
+def load_real_data_model():
+    real_data_path = "real_sales_data.csv"
+    if os.path.exists("model.pkl"):
+        return joblib.load("model.pkl")
+    if not os.path.exists(real_data_path):
+        st.warning("Real dataset not found. Using fallback regression model.")
+        return load_fallback_model()
+    df = pd.read_csv(real_data_path)
+    expected_features = [f"f{i}" for i in range(512)] + ["lat", "lon"]
+    if not all(col in df.columns for col in expected_features + ["sales"]):
+        st.error("real_sales_data.csv must have 512 features (f0 to f511), lat, lon, and sales columns")
+        return load_fallback_model()
+    X = df[expected_features]
+    y = df["sales"]
+    model = GradientBoostingRegressor()
+    model.fit(X, y)
+    joblib.dump(model, "model.pkl")
+    st.success("Real dataset-based model trained and loaded ✅")
+    return model
+
+# ACTUAL LOAD MODEL INSTANCE
+load_model = load_real_data_model()
+
 # --- App ---
 st.title("📈 Retail AI: Forecast, Benchmarking & Strategy")
 store = st.text_input("🏪 Store Name (e.g. Taco Bell Robbinsville)")
@@ -193,13 +221,12 @@ if not coords:
 
 if coords:
     image = fetch_or_upload_satellite_image(coords)
-    st.image(image, caption="🛋️ Satellite View", use_container_width=True)
+    st.image(image, caption="🪋 Satellite View", use_container_width=True)
 
     if st.button("📊 Predict & Analyze"):
         try:
             features, foot, soc = build_feature_vector(image, coords)
-            model = load_model()
-            pred = max(model.predict([features])[0], 0)
+            pred = max(load_model.predict([features])[0], 0)
             st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}**")
             save_prediction(store, coords, pred, foot, soc)
             plot_insights(store)
@@ -209,43 +236,4 @@ if coords:
                 st.markdown(f"- {r}")
         except Exception as e:
             st.error(f"Prediction failed: {e}")
-
-# --- Real Dataset Training Integration ---
-...
-# (Keep everything before this unchanged)
-
-# --- Model loading and fallback ---
-
- # Add this import near the top
-
-def load_fallback_model():
-    dummy = DummyRegressor(strategy="mean")
-    dummy.fit([[0]*514], [0])  # 512 features + lat + lon
-    return dummy
-
-def load_real_data_model():
-    real_data_path = "real_sales_data.csv"
-    if os.path.exists("model.pkl"):
-        model = joblib.load("model.pkl")
-        return model
-    if not os.path.exists(real_data_path):
-        st.warning("Real dataset not found. Using fallback regression model.")
-        return load_fallback_model()
-    df = pd.read_csv(real_data_path)
-    expected_features = [f"f{i}" for i in range(512)] + ["lat", "lon"]
-    if not all(col in df.columns for col in expected_features + ["sales"]):
-        st.error("real_sales_data.csv must have 512 features (f0 to f511), lat, lon, and sales columns")
-        return load_fallback_model()
-    X = df[expected_features]
-    y = df["sales"]
-    model = GradientBoostingRegressor()
-    model.fit(X, y)
-    joblib.dump(model, "model.pkl")
-    st.success("Real dataset-based model trained and loaded ✅")
-    return model
-
-load_model = load_real_data_model  # Put this AFTER both functions are defined
-
-...
-# (Keep everything after this unchanged)
 
