@@ -1,3 +1,21 @@
-f0,f1,f2,...,f511,lat,lon,sales
-0.23,0.44,...,0.91,40.7128,-74.0060,28250
-...
+import pandas as pd
+import numpy as np
+
+# Simulate real_sales_data.csv with valid dummy data
+num_samples = 100
+
+# 512 features named f0 to f511
+features = {f"f{i}": np.random.rand(num_samples) for i in range(512)}
+
+# Add lat, lon, and sales
+features["lat"] = np.random.uniform(25, 49, size=num_samples)  # US latitudes
+features["lon"] = np.random.uniform(-125, -66, size=num_samples)  # US longitudes
+features["sales"] = np.random.randint(10000, 40000, size=num_samples)
+
+# Create DataFrame
+real_data_df = pd.DataFrame(features)
+
+# Save to CSV
+real_data_df.to_csv("real_sales_data.csv", index=False)
+
+print("✅ real_sales_data.csv generated with valid schema.")
