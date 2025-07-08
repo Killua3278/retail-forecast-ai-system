@@ -112,7 +112,7 @@ def load_model():
             raise ValueError("Model mismatch with features")
         return model
     X, y = make_regression(n_samples=100, n_features=514, noise=0.1)
-    y = np.abs(y)
+    y = np.abs(y * 100 + 25000)
     model = GradientBoostingRegressor().fit(X, y)
     joblib.dump(model, "model.pkl")
     return model
@@ -156,6 +156,46 @@ def plot_insights(store):
     st.plotly_chart(px.bar(avg_type, x="type", y="sales", title="Avg Sales by Store Type"))
     st.plotly_chart(px.pie(df, names="type", values="sales", title="Store Type Distribution"))
 
+def generate_recommendations(store, store_type, foot, soc, sales):
+    recs = []
+    if foot < 0.4:
+        recs.append("🔻 Foot traffic is low. Consider placing geofenced mobile ads or joining local delivery platforms.")
+    elif foot < 0.6:
+        recs.append("🚶‍♂️ Average foot traffic. Set up sidewalk signage or window displays to increase walk-ins.")
+    else:
+        recs.append("🚦 High foot traffic detected. Promote limited-time bundles and impulse buys.")
+    if soc < 40:
+        recs.append("📉 Low social media activity. Post behind-the-scenes videos, reviews, and tag your location on Instagram.")
+    elif soc < 70:
+        recs.append("📱 Moderate buzz. Use hashtag campaigns and stories to boost daily engagement.")
+    else:
+        recs.append("📢 High buzz! Launch influencer deals or flash discounts to ride the momentum.")
+    store_lower = store.lower()
+    if "taco" in store_lower or "bell" in store_lower or store_type == "Fast Food":
+        recs.extend([
+            "🌮 *Fast Food Strategy*: Stock popular items like Cravings Boxes and combo meals between 12–2pm & 6–8pm.",
+            "📦 Use pre-prepared ingredients during peak hours to cut wait times.",
+            "📊 Test digital order kiosks or loyalty app promotions."
+        ])
+    elif store_type == "Coffee Shop":
+        recs.extend([
+            "☕ Consider limited-time drinks to boost morning visits (8–10am).",
+            "💡 Partner with local bakeries for upsell combos.",
+            "📲 Encourage reviews via QR codes on cups to build community trust."
+        ])
+    elif store_type == "Boutique":
+        recs.extend([
+            "👜 Highlight new arrivals via Instagram reels or livestreams.",
+            "🎯 Run loyalty-based discounts for repeat customers.",
+            "📆 Organize a themed event or seasonal promo to increase footfall."
+        ])
+    if sales > 30000:
+        recs.append("📈 Sales are strong! Evaluate expanding inventory or testing higher-margin products.")
+    elif sales < 10000:
+        recs.append("🔍 Underperforming sales. Benchmark competitors in the area using foot traffic + buzz to identify gaps.")
+    recs.append("🧠 Pro Tip: Use customer purchase history (even manually tracked) to promote repeat buying patterns.")
+    return recs
+
 # --- App ---
 st.title("📈 Retail AI: Forecast, Benchmarking & Strategy")
 store = st.text_input("🏪 Store Name (e.g. Taco Bell Robbinsville)")
@@ -186,27 +226,9 @@ if coords:
             plot_insights(store)
 
             st.subheader("📦 Actionable Strategy & Inventory Advice")
-            recs = []
-            if foot < 0.4:
-                recs.append("🛑 Low traffic: Offer in-store exclusive deals + signage visibility upgrades.")
-            elif foot > 0.7:
-                recs.append("🚦 High traffic: Consider fast checkout stations or bundle pricing.")
-            if soc < 35:
-                recs.append("📉 Low buzz: Start TikTok or Reels challenges tagged locally.")
-            elif soc > 70:
-                recs.append("🔥 Trending: Leverage influencer promo codes for new customers.")
-
-            if store_type == "Fast Food" or "taco" in store.lower():
-                recs.append("🌮 Taco Insight: Boost inventory for beef/chicken combo SKUs Fri-Sun.")
-                recs.append("📊 Popular hours: 11:30am–1pm & 6pm–8pm — plan staff accordingly.")
-                recs.append("📦 Consider pre-packing popular $5 box items to reduce order time.")
-
-            if not recs:
-                recs.append("🧠 Tip: Add loyalty punch card + QR-based feedback system.")
-
+            recs = generate_recommendations(store, store_type, foot, soc, pred)
             for r in recs:
                 st.markdown(f"- {r}")
-
         except Exception as e:
             st.error(f"Prediction failed: {e}")
 
