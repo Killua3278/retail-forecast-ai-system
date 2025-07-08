@@ -232,3 +232,34 @@ if coords:
         except Exception as e:
             st.error(f"Prediction failed: {e}")
 
+# ✅ Added Smart Real Dataset Integration to Existing Code
+# Append this directly to the bottom of your current script
+
+# --- Real Dataset Training Integration ---
+def load_real_data_model():
+    real_data_path = "real_sales_data.csv"
+    if os.path.exists("model.pkl"):
+        model = joblib.load("model.pkl")
+        return model
+
+    if not os.path.exists(real_data_path):
+        st.warning("Real dataset not found. Using fallback regression model.")
+        return load_model()  # fallback dummy model
+
+    df = pd.read_csv(real_data_path)
+    expected_features = [f"f{i}" for i in range(512)] + ["lat", "lon"]
+    if not all(col in df.columns for col in expected_features + ["sales"]):
+        st.error("real_sales_data.csv must have 512 features (f0 to f511), lat, lon, and sales columns")
+        return load_model()
+
+    X = df[expected_features]
+    y = df["sales"]
+
+    model = GradientBoostingRegressor()
+    model.fit(X, y)
+    joblib.dump(model, "model.pkl")
+    st.success("Real dataset-based model trained and loaded ✅")
+    return model
+
+# Override previous model loader with this new real-data-powered one
+load_model = load_real_data_model
