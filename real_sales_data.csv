@@ -1,19 +1,23 @@
 import pandas as pd
 import numpy as np
 
-# --- Simulate real sales dataset ---
-def generate_real_sales_data(filename="real_sales_data.csv", num_rows=100):
-    np.random.seed(42)
-    features = np.random.rand(num_rows, 512)
-    lat = np.random.uniform(25.0, 49.0, size=(num_rows, 1))
-    lon = np.random.uniform(-124.0, -66.0, size=(num_rows, 1))
-    sales = np.random.randint(5000, 50000, size=(num_rows, 1))
+# --- Configuration ---
+num_samples = 10
+num_features = 512
 
-    data = np.hstack([features, lat, lon, sales])
-    cols = [f"f{i}" for i in range(512)] + ["lat", "lon", "sales"]
-    df = pd.DataFrame(data, columns=cols)
-    df.to_csv(filename, index=False)
-    print(f"✅ {filename} created with {num_rows} rows.")
+# --- Generate dummy features (f0 to f511) ---
+data = {
+    f"f{i}": np.random.rand(num_samples) * 100 for i in range(num_features)
+}
 
-# --- Run ---
-generate_real_sales_data()
+# --- Add lat, lon, and sales columns ---
+data["lat"] = np.random.uniform(25.0, 50.0, size=num_samples)   # USA latitude range
+data["lon"] = np.random.uniform(-125.0, -70.0, size=num_samples)  # USA longitude range
+data["sales"] = np.random.uniform(1000, 50000, size=num_samples)
+
+# --- Convert to DataFrame ---
+df = pd.DataFrame(data)
+
+# --- Save as real_sales_data.csv ---
+df.to_csv("real_sales_data.csv", index=False)
+print("✅ real_sales_data.csv created with shape:", df.shape)
