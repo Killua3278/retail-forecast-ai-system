@@ -76,62 +76,74 @@ def fetch_or_upload_satellite_image(coords):
         return Image.new("RGB", (512, 512), color=(200, 200, 200))
     try:
         url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key={api_key}"
-        res = requests.get(url)
-        res.raise_for_status()
-        return Image.open(io.BytesIO(res.content)).convert("RGB")
-    except:
-        return Image.new("RGB", (512, 512), color=(160, 160, 160))
-
-def extract_satellite_features(img):
-    model = resnet18(pretrained=True)
-    model.eval()
-    model = nn.Sequential(*list(model.children())[:-1])
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-    ])
-    tensor = transform(img).unsqueeze(0)
-    with torch.no_grad():
-        return model(tensor).view(1, -1).numpy().flatten()
-
-def get_safegraph_score(lat, lon):
-    return np.random.uniform(0.4, 0.85)
-
-def fetch_social_sentiment(lat, lon):
-    return np.random.randint(35, 100)
-
-def build_feature_vector(img, coords):
-    return np.concatenate([
-        extract_satellite_features(img),
-        [get_safegraph_score(*coords), fetch_social_sentiment(*coords)]
-    ]), get_safegraph_score(*coords), fetch_social_sentiment(*coords)
-
-def get_coords_from_store_name(name):
-    try:
-        geolocator = Nominatim(user_agent="retail_ai_locator")
-        location = geolocator.geocode(name)
-        if location:
-            return [(location.latitude, location.longitude, location.address)]
-        return []
-    except:
-        return []
-
-def show_map_with_selection(options):
-    st.subheader("📍 Select Your Store Location")
-    m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14)
-    for lat, lon, label in options:
-        folium.Marker(location=[lat, lon], tooltip=label).add_to(m)
-    result = st_folium(m, height=350, width=700)
-    return options[0][:2] if options else None
-
-def save_prediction(store, coords, pred, foot, soc):
-    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
-                      columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
-    if os.path.exists("sales_history.csv"):
-        old = pd.read_csv("sales_history.csv")
-        df = pd.concat([old, df], ignore_index=True)
-    df.to_csv("sales_history.csv", index=False)
-
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/retail_forecast_app 3.py	 b/retail_forecast_app 3.py	
+index b11509d3bbc3f972331aea544885fe78fb4fc870..2407e05c05e135fe6014cb9abf9a477a9791bcda 100644
+--- a/retail_forecast_app 3.py	
++++ b/retail_forecast_app 3.py	
+@@ -79,54 +79,57 @@ def fetch_or_upload_satellite_image(coords):
+         res = requests.get(url)
+         res.raise_for_status()
+         return Image.open(io.BytesIO(res.content)).convert("RGB")
+     except:
+         return Image.new("RGB", (512, 512), color=(160, 160, 160))
+ 
+ def extract_satellite_features(img):
+     model = resnet18(pretrained=True)
+     model.eval()
+     model = nn.Sequential(*list(model.children())[:-1])
+     transform = transforms.Compose([
+         transforms.Resize((224, 224)),
+         transforms.ToTensor(),
+     ])
+     tensor = transform(img).unsqueeze(0)
+     with torch.no_grad():
+         return model(tensor).view(1, -1).numpy().flatten()
+ 
+ def get_safegraph_score(lat, lon):
+     return np.random.uniform(0.4, 0.85)
+ 
+ def fetch_social_sentiment(lat, lon):
+     return np.random.randint(35, 100)
+ 
+ def build_feature_vector(img, coords):
+-    return np.concatenate([
++    foot_score = get_safegraph_score(*coords)
++    social_score = fetch_social_sentiment(*coords)
++    features = np.concatenate([
+         extract_satellite_features(img),
+-        [get_safegraph_score(*coords), fetch_social_sentiment(*coords)]
+-    ]), get_safegraph_score(*coords), fetch_social_sentiment(*coords)
++        [foot_score, social_score]
++    ])
++    return features, foot_score, social_score
+ 
+ def get_coords_from_store_name(name):
+     try:
+         geolocator = Nominatim(user_agent="retail_ai_locator")
+         location = geolocator.geocode(name)
+         if location:
+             return [(location.latitude, location.longitude, location.address)]
+         return []
+     except:
+         return []
+ 
+ def show_map_with_selection(options):
+     st.subheader("📍 Select Your Store Location")
+     m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14)
+     for lat, lon, label in options:
+         folium.Marker(location=[lat, lon], tooltip=label).add_to(m)
+     result = st_folium(m, height=350, width=700)
+     return options[0][:2] if options else None
+ 
+ def save_prediction(store, coords, pred, foot, soc):
+     df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
+                       columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
+     if os.path.exists("sales_history.csv"):
+         old = pd.read_csv("sales_history.csv")
+         df = pd.concat([old, df], ignore_index=True)
+ 
+EOF
 def plot_insights(store):
     if not os.path.exists("sales_history.csv"):
         return st.info("No data yet.")
