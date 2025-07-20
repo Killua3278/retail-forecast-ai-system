@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 import torch.nn as nn
 from geopy.geocoders import Nominatim
 from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.dummy import DummyRegressor 
+from sklearn.dummy import DummyRegressor
 
 load_dotenv()
 
@@ -31,7 +31,7 @@ theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=0)
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = (theme == "Dark")
 
-if st.sidebar.button("🪹 Clear Sales History"):
+if st.sidebar.button("🩹 Clear Sales History"):
     if os.path.exists("sales_history.csv"):
         os.remove("sales_history.csv")
         st.sidebar.success("History cleared.")
@@ -76,85 +76,82 @@ def fetch_or_upload_satellite_image(coords):
         return Image.new("RGB", (512, 512), color=(200, 200, 200))
     try:
         url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key={api_key}"
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/retail_forecast_app 3.py	 b/retail_forecast_app 3.py	
-index b11509d3bbc3f972331aea544885fe78fb4fc870..2407e05c05e135fe6014cb9abf9a477a9791bcda 100644
---- a/retail_forecast_app 3.py	
-+++ b/retail_forecast_app 3.py	
-@@ -79,54 +79,57 @@ def fetch_or_upload_satellite_image(coords):
-         res = requests.get(url)
-         res.raise_for_status()
-         return Image.open(io.BytesIO(res.content)).convert("RGB")
-     except:
-         return Image.new("RGB", (512, 512), color=(160, 160, 160))
- 
- def extract_satellite_features(img):
-     model = resnet18(pretrained=True)
-     model.eval()
-     model = nn.Sequential(*list(model.children())[:-1])
-     transform = transforms.Compose([
-         transforms.Resize((224, 224)),
-         transforms.ToTensor(),
-     ])
-     tensor = transform(img).unsqueeze(0)
-     with torch.no_grad():
-         return model(tensor).view(1, -1).numpy().flatten()
- 
- def get_safegraph_score(lat, lon):
-     return np.random.uniform(0.4, 0.85)
- 
- def fetch_social_sentiment(lat, lon):
-     return np.random.randint(35, 100)
- 
- def build_feature_vector(img, coords):
--    return np.concatenate([
-+    foot_score = get_safegraph_score(*coords)
-+    social_score = fetch_social_sentiment(*coords)
-+    features = np.concatenate([
-         extract_satellite_features(img),
--        [get_safegraph_score(*coords), fetch_social_sentiment(*coords)]
--    ]), get_safegraph_score(*coords), fetch_social_sentiment(*coords)
-+        [foot_score, social_score]
-+    ])
-+    return features, foot_score, social_score
- 
- def get_coords_from_store_name(name):
-     try:
-         geolocator = Nominatim(user_agent="retail_ai_locator")
-         location = geolocator.geocode(name)
-         if location:
-             return [(location.latitude, location.longitude, location.address)]
-         return []
-     except:
-         return []
- 
- def show_map_with_selection(options):
-     st.subheader("📍 Select Your Store Location")
-     m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14)
-     for lat, lon, label in options:
-         folium.Marker(location=[lat, lon], tooltip=label).add_to(m)
-     result = st_folium(m, height=350, width=700)
-     return options[0][:2] if options else None
- 
- def save_prediction(store, coords, pred, foot, soc):
-     df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
-                       columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
-     if os.path.exists("sales_history.csv"):
-         old = pd.read_csv("sales_history.csv")
-         df = pd.concat([old, df], ignore_index=True)
- 
-EOF
+        res = requests.get(url)
+        res.raise_for_status()
+        return Image.open(io.BytesIO(res.content)).convert("RGB")
+    except:
+        return Image.new("RGB", (512, 512), color=(160, 160, 160))
+
+def extract_satellite_features(img):
+    model = resnet18(pretrained=True)
+    model.eval()
+    model = nn.Sequential(*list(model.children())[:-1])
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+    ])
+    tensor = transform(img).unsqueeze(0)
+    with torch.no_grad():
+        return model(tensor).view(1, -1).numpy().flatten()
+
+def get_safegraph_score(lat, lon):
+    return np.random.uniform(0.4, 0.85)
+
+def fetch_social_sentiment(lat, lon):
+    return np.random.randint(35, 100)
+
+def build_feature_vector(img, coords):
+    foot_score = get_safegraph_score(*coords)
+    social_score = fetch_social_sentiment(*coords)
+    features = np.concatenate([
+        extract_satellite_features(img),
+        [foot_score, social_score]
+    ])
+    return features, foot_score, social_score
+
+def get_coords_from_store_name(name):
+    try:
+        geolocator = Nominatim(user_agent="retail_ai_locator")
+        location = geolocator.geocode(name)
+        if location:
+            return [(location.latitude, location.longitude, location.address)]
+        return []
+    except:
+        return []
+
+def show_map_with_selection(options):
+    st.subheader("📍 Select Your Store Location")
+    m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14)
+    for lat, lon, label in options:
+        folium.Marker(location=[lat, lon], tooltip=label).add_to(m)
+    result = st_folium(m, height=350, width=700)
+    return options[0][:2] if options else None
+
+def save_prediction(store, coords, pred, foot, soc):
+    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
+                      columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
+    if os.path.exists("sales_history.csv"):
+        try:
+            old = pd.read_csv("sales_history.csv", on_bad_lines='skip')
+            df = pd.concat([old, df], ignore_index=True)
+        except:
+            st.warning("Corrupted history file. Overwriting.")
+    df.to_csv("sales_history.csv", index=False)
+
 def plot_insights(store):
     if not os.path.exists("sales_history.csv"):
         return st.info("No data yet.")
-    df = pd.read_csv("sales_history.csv")
+    try:
+        df = pd.read_csv("sales_history.csv", on_bad_lines='skip')
+    except:
+        return st.warning("Could not read history file.")
     df = df[df["store"].astype(str).str.lower() == store.lower()]
     if df.empty:
         return st.warning("No data found.")
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     st.plotly_chart(px.line(df, x="timestamp", y="sales", title="Sales Over Time"))
     st.plotly_chart(px.area(df, x="timestamp", y=["foot", "social"], title="Foot Traffic & Social Buzz"))
-    total = pd.read_csv("sales_history.csv")
+    total = pd.read_csv("sales_history.csv", on_bad_lines='skip')
     avg_type = total.groupby("type")["sales"].mean().reset_index()
     st.plotly_chart(px.bar(avg_type, x="type", y="sales", title="Avg Sales by Store Type"))
     st.plotly_chart(px.pie(df, names="type", values="sales", title="Store Type Distribution"))
@@ -189,7 +186,7 @@ def generate_recommendations(store, store_type, foot, soc, sales):
 # --- Model loading and fallback ---
 def load_fallback_model():
     dummy = DummyRegressor(strategy="mean")
-    dummy.fit([[0]*514], [0])  # 512 features + lat + lon
+    dummy.fit([[0]*514], [0])  # 512 features + foot + social
     return dummy
 
 def load_real_data_model():
@@ -199,7 +196,11 @@ def load_real_data_model():
     if not os.path.exists(real_data_path):
         st.warning("Real dataset not found. Using fallback regression model.")
         return load_fallback_model()
-    df = pd.read_csv(real_data_path)
+    try:
+        df = pd.read_csv(real_data_path, on_bad_lines='skip')
+    except:
+        st.error("Error reading real_sales_data.csv")
+        return load_fallback_model()
     expected_features = [f"f{i}" for i in range(512)] + ["lat", "lon"]
     if not all(col in df.columns for col in expected_features + ["sales"]):
         st.error("real_sales_data.csv must have 512 features (f0 to f511), lat, lon, and sales columns")
@@ -233,7 +234,7 @@ if not coords:
 
 if coords:
     image = fetch_or_upload_satellite_image(coords)
-    st.image(image, caption="🪋 Satellite View", use_container_width=True)
+    st.image(image, caption="🧪 Satellite View", use_container_width=True)
 
     if st.button("📊 Predict & Analyze"):
         try:
@@ -248,4 +249,5 @@ if coords:
                 st.markdown(f"- {r}")
         except Exception as e:
             st.error(f"Prediction failed: {e}")
+
 
