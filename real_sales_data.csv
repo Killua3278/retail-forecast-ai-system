@@ -1,23 +1,19 @@
 import pandas as pd
 import numpy as np
 
-# Number of samples and features
+# Parameters
 n_samples = 250
 n_features = 512
 
-# Generate dummy satellite features
-features = {f"f{i}": np.random.rand(n_samples) for i in range(n_features)}
+# Satellite image features (f0 to f511)
+data = {f"f{i}": np.random.normal(loc=0.5, scale=0.15, size=n_samples) for i in range(n_features)}
 
-# Latitude and Longitude (US-based coordinates for realism)
-features["lat"] = np.random.uniform(34.0, 42.0, n_samples)  # Example: California to New York range
-features["lon"] = np.random.uniform(-118.0, -73.0, n_samples)
+# Coordinates and synthetic targets
+data["lat"] = np.random.uniform(34.0, 42.0, n_samples)
+data["lon"] = np.random.uniform(-118.0, -73.0, n_samples)
+data["sales"] = np.random.randint(5000, 40000, n_samples)
 
-# Generate synthetic weekly sales values (realistic range)
-features["sales"] = np.random.randint(2000, 50000, n_samples)
-
-# Combine into a DataFrame
-df = pd.DataFrame(features)
-
-# Save to CSV
-df.to_csv("real_sales_data.csv", index=False)
-print("✅ 'real_sales_data.csv' cleaned and created successfully with 512 features + lat, lon, and sales.")
+# Assemble DataFrame and save
+real_sales_data = pd.DataFrame(data)
+real_sales_data.to_csv("real_sales_data.csv", index=False)
+print("✅ real_sales_data.csv created successfully with 512 features + lat, lon, and sales")
