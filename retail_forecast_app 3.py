@@ -1,5 +1,4 @@
 # --- Imports and Setup ---
-from sklearn.datasets import make_regression
 import streamlit as st
 import requests
 from PIL import Image
@@ -14,6 +13,8 @@ from streamlit_folium import st_folium
 import folium
 from dotenv import load_dotenv
 import torch.nn as nn
+from torchvision import transforms
+from torchvision.models import resnet18
 from geopy.geocoders import Nominatim
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.dummy import DummyRegressor
@@ -61,25 +62,21 @@ def set_theme():
 set_theme()
 
 # --- Vision ---
-try:
-    from torchvision import transforms
-    from torchvision.models import resnet18
-except:
-    st.error("Missing torchvision. Add it to requirements.txt")
-
 def fetch_or_upload_satellite_image(coords):
     uploaded = st.file_uploader("Upload custom satellite image", type=["jpg", "jpeg", "png"])
     if uploaded:
         return Image.open(uploaded).convert("RGB")
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if not api_key:
+        st.error("Missing Google Maps API key")
         return Image.new("RGB", (512, 512), color=(200, 200, 200))
     try:
-        url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=17&size=600x400&maptype=satellite&key={api_key}"
+        url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=18&size=600x400&maptype=satellite&key={api_key}"
         res = requests.get(url)
         res.raise_for_status()
         return Image.open(io.BytesIO(res.content)).convert("RGB")
-    except:
+    except Exception as e:
+        st.error(f"Satellite image fetch error: {e}")
         return Image.new("RGB", (512, 512), color=(160, 160, 160))
 
 def extract_satellite_features(img):
@@ -93,8 +90,7 @@ def extract_satellite_features(img):
     tensor = transform(img).unsqueeze(0)
     with torch.no_grad():
         features = model(tensor).view(1, -1).numpy().flatten()
-    features = np.resize(features, 512)  # Ensure exactly 512
-    return features
+    return np.resize(features, 512)
 
 def get_safegraph_score(lat, lon):
     return np.random.uniform(0.4, 0.85)
@@ -109,10 +105,10 @@ def build_feature_vector(img, coords):
     features = np.concatenate([satellite_features, [coords[0], coords[1]]])
     return features, foot_score, social_score
 
-def get_coords_from_store_name(name):
+def get_coords_from_store_name(name, zip_code):
     try:
         geolocator = Nominatim(user_agent="retail_ai_locator")
-        location = geolocator.geocode(name)
+        location = geolocator.geocode(f"{name}, {zip_code}") if zip_code else geolocator.geocode(name)
         if location:
             return [(location.latitude, location.longitude, location.address)]
         return []
@@ -124,7 +120,7 @@ def show_map_with_selection(options):
     m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14)
     for lat, lon, label in options:
         folium.Marker(location=[lat, lon], tooltip=label).add_to(m)
-    result = st_folium(m, height=350, width=700)
+    st_folium(m, height=350, width=700)
     return options[0][:2] if options else None
 
 def save_prediction(store, coords, pred, foot, soc):
@@ -159,31 +155,26 @@ def plot_insights(store):
 def generate_recommendations(store, store_type, foot, soc, sales):
     recs = []
     if foot < 0.4:
-        recs.append("🔻 Foot traffic is low. Consider placing geofenced mobile ads or joining local delivery platforms.")
+        recs.append("🔻 Low foot traffic. Consider mobile ads or joining delivery platforms.")
     elif foot < 0.6:
-        recs.append("🚶‍♂️ Average foot traffic. Set up sidewalk signage or window displays to increase walk-ins.")
+        recs.append("🚶‍♂️ Average traffic. Use signage or in-store events.")
     else:
-        recs.append("🚦 High foot traffic detected. Promote limited-time bundles and impulse buys.")
+        recs.append("🚦 High traffic. Push time-limited combos or flash sales.")
     if soc < 40:
-        recs.append("📉 Low social media activity. Post behind-the-scenes videos, reviews, and tag your location on Instagram.")
+        recs.append("📉 Weak social presence. Post reels, behind-the-scenes, promos.")
     elif soc < 70:
-        recs.append("📱 Moderate buzz. Use hashtag campaigns and stories to boost daily engagement.")
+        recs.append("📱 Moderate engagement. Add stories and location tags.")
     else:
-        recs.append("📢 High buzz! Launch influencer deals or flash discounts to ride the momentum.")
-    if "taco" in store.lower() or "bell" in store.lower() or store_type == "Fast Food":
-        recs.extend([
-            "🌮 *Fast Food Strategy*: Stock popular items like Cravings Boxes and combo meals between 12–2pm & 6–8pm.",
-            "📦 Use pre-prepared ingredients during peak hours to cut wait times.",
-            "📊 Test digital order kiosks or loyalty app promotions."
-        ])
+        recs.append("📢 Great buzz. Offer referral or influencer rewards.")
+    if store_type == "Fast Food" or "taco" in store.lower():
+        recs.append("🌮 Optimize peak lunch and dinner rush with ready-to-go inventory.")
     if sales > 30000:
-        recs.append("📈 Sales are strong! Evaluate expanding inventory or testing higher-margin products.")
+        recs.append("📈 High sales. Test new premium items or expand inventory.")
     elif sales < 10000:
-        recs.append("🔍 Underperforming sales. Benchmark competitors in the area using foot traffic + buzz to identify gaps.")
-    recs.append("🧠 Pro Tip: Use customer purchase history (even manually tracked) to promote repeat buying patterns.")
+        recs.append("🔍 Low performance. Benchmark neighbors, improve window appeal.")
+    recs.append("🧠 Tip: Track customer favorites, even on paper, to personalize deals.")
     return recs
 
-# --- Model loading and fallback ---
 def load_fallback_model():
     dummy = DummyRegressor(strategy="mean")
     dummy.fit([[0]*514], [10000])
@@ -194,40 +185,35 @@ def load_real_data_model():
     if os.path.exists("model.pkl"):
         return joblib.load("model.pkl")
     if not os.path.exists(real_data_path):
-        st.warning("Real dataset not found. Using fallback regression model.")
+        st.warning("Real dataset not found. Using fallback model.")
         return load_fallback_model()
     try:
         df = pd.read_csv(real_data_path, on_bad_lines='skip')
     except:
-        st.error("Error reading real_sales_data.csv")
+        st.error("real_sales_data.csv read error")
         return load_fallback_model()
-    expected_features = [f"f{i}" for i in range(512)] + ["lat", "lon"]
-    if not all(col in df.columns for col in expected_features + ["sales"]):
-        st.error("real_sales_data.csv must have 512 features (f0 to f511), lat, lon, and sales columns")
+    expected = [f"f{i}" for i in range(512)] + ["lat", "lon"]
+    if not all(col in df.columns for col in expected + ["sales"]):
+        st.error("real_sales_data.csv missing required columns")
         return load_fallback_model()
-    X = df[expected_features]
-    y = df["sales"]
+    X, y = df[expected], df["sales"]
     model = GradientBoostingRegressor()
     model.fit(X, y)
     joblib.dump(model, "model.pkl")
-    st.success("Real dataset-based model trained and loaded ✅")
     return model
 
-# ACTUAL LOAD MODEL INSTANCE
-load_model = load_real_data_model()
-
 # --- App ---
-st.title("📈 Retail AI: Forecast, Benchmarking & Strategy")
-store = st.text_input("🏪 Store Name (e.g. Taco Bell Robbinsville)")
+st.title("📈 Retail AI: Forecast & Strategy")
+store = st.text_input("🏪 Store Name (e.g. Dave's Hot Chicken)")
+zip_code = st.text_input("📍 ZIP Code (optional)")
 coords = None
 
 if store:
-    candidates = get_coords_from_store_name(store)
+    candidates = get_coords_from_store_name(store, zip_code)
     if candidates:
-        st.success("Pick your exact store from below:")
         coords = show_map_with_selection(candidates)
     else:
-        st.warning("Could not geolocate. Please pick on map below.")
+        st.warning("Location not found. Defaulting to New York.")
 
 if not coords:
     coords = show_map_with_selection([(40.7128, -74.0060, "New York (default)")])
@@ -239,16 +225,15 @@ if coords:
     if st.button("📊 Predict & Analyze"):
         try:
             features, foot, soc = build_feature_vector(image, coords)
-            pred = max(load_model.predict([features])[0], 0)
+            model = load_real_data_model()
+            pred = max(model.predict([features])[0], 0)
             st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}**")
             save_prediction(store, coords, pred, foot, soc)
             plot_insights(store)
-            st.subheader("📦 Actionable Strategy & Inventory Advice")
-            recs = generate_recommendations(store, store_type, foot, soc, pred)
-            for r in recs:
+            st.subheader("📦 Strategy Recommendations")
+            for r in generate_recommendations(store, store_type, foot, soc, pred):
                 st.markdown(f"- {r}")
         except Exception as e:
-            st.error(f"Prediction failed: {e}")
-
+            st.error(f"❌ Prediction failed: {e}")
 
 
