@@ -21,7 +21,6 @@ from sklearn.dummy import DummyRegressor
 
 load_dotenv()
 
-# --- Page Setup ---
 st.set_page_config(page_title="Retail AI Platform", layout="wide")
 
 # --- Sidebar ---
@@ -39,29 +38,22 @@ if st.sidebar.button("🩹 Clear Sales History"):
 
 # --- Theme ---
 def set_theme():
-    if st.session_state.dark_mode:
-        st.markdown("""
+    dark = st.session_state.dark_mode
+    style = """
         <style>
         body, .main, .block-container, .sidebar .sidebar-content {
-            background-color: #111827 !important;
-            color: #e5e7eb !important;
+            background-color: %s !important;
+            color: %s !important;
         }
         .stButton>button {
-            background-color: #6366f1;
+            background-color: %s;
             color: white;
         }
-        </style>""", unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <style>
-        .stButton>button {
-            background-color: #e5e7eb;
-            color: #111827;
-        }
-        </style>""", unsafe_allow_html=True)
+        </style>""" % ("#111827" if dark else "#ffffff", "#e5e7eb" if dark else "#111827", "#6366f1")
+    st.markdown(style, unsafe_allow_html=True)
 set_theme()
 
-# --- Vision ---
+# --- Vision & Utilities ---
 def fetch_or_upload_satellite_image(coords):
     uploaded = st.file_uploader("Upload custom satellite image", type=["jpg", "jpeg", "png"])
     if uploaded:
@@ -83,10 +75,7 @@ def extract_satellite_features(img):
     model = resnet18(pretrained=True)
     model.eval()
     model = nn.Sequential(*list(model.children())[:-1])
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-    ])
+    transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
     tensor = transform(img).unsqueeze(0)
     with torch.no_grad():
         features = model(tensor).view(1, -1).numpy().flatten()
@@ -99,21 +88,20 @@ def fetch_social_sentiment(lat, lon):
     return np.random.randint(35, 100)
 
 def build_feature_vector(img, coords):
-    foot_score = get_safegraph_score(*coords)
-    social_score = fetch_social_sentiment(*coords)
-    satellite_features = extract_satellite_features(img)
-    features = np.concatenate([satellite_features, [coords[0], coords[1]]])
-    return features, foot_score, social_score
+    return np.concatenate([
+        extract_satellite_features(img), [coords[0], coords[1]]
+    ]), get_safegraph_score(*coords), fetch_social_sentiment(*coords)
 
 def get_coords_from_store_name(name, zip_code):
     try:
+        query = f"{name}, {zip_code}" if zip_code else name
         geolocator = Nominatim(user_agent="retail_ai_locator")
-        location = geolocator.geocode(f"{name}, {zip_code}") if zip_code else geolocator.geocode(name)
+        location = geolocator.geocode(query)
         if location:
             return [(location.latitude, location.longitude, location.address)]
-        return []
     except:
-        return []
+        pass
+    return []
 
 def show_map_with_selection(options):
     st.subheader("📍 Select Your Store Location")
@@ -121,7 +109,7 @@ def show_map_with_selection(options):
     for lat, lon, label in options:
         folium.Marker(location=[lat, lon], tooltip=label).add_to(m)
     st_folium(m, height=350, width=700)
-    return options[0][:2] if options else None
+    return options[0][:2]
 
 def save_prediction(store, coords, pred, foot, soc):
     df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
@@ -182,25 +170,26 @@ def load_fallback_model():
 
 def load_real_data_model():
     real_data_path = "real_sales_data.csv"
+    expected_cols = [f"f{i}" for i in range(512)] + ["lat", "lon", "sales"]
     if os.path.exists("model.pkl"):
         return joblib.load("model.pkl")
     if not os.path.exists(real_data_path):
-        st.warning("Real dataset not found. Using fallback model.")
+        st.warning("real_sales_data.csv not found. Using fallback model.")
         return load_fallback_model()
     try:
-        df = pd.read_csv(real_data_path, on_bad_lines='skip')
-    except:
-        st.error("real_sales_data.csv read error")
+        df = pd.read_csv(real_data_path)
+        if not all(col in df.columns for col in expected_cols):
+            st.error("real_sales_data.csv missing required columns")
+            return load_fallback_model()
+        X = df[[f"f{i}" for i in range(512)] + ["lat", "lon"]]
+        y = df["sales"]
+        model = GradientBoostingRegressor()
+        model.fit(X, y)
+        joblib.dump(model, "model.pkl")
+        return model
+    except Exception as e:
+        st.error(f"Model load error: {e}")
         return load_fallback_model()
-    expected = [f"f{i}" for i in range(512)] + ["lat", "lon"]
-    if not all(col in df.columns for col in expected + ["sales"]):
-        st.error("real_sales_data.csv missing required columns")
-        return load_fallback_model()
-    X, y = df[expected], df["sales"]
-    model = GradientBoostingRegressor()
-    model.fit(X, y)
-    joblib.dump(model, "model.pkl")
-    return model
 
 # --- App ---
 st.title("📈 Retail AI: Forecast & Strategy")
@@ -235,5 +224,3 @@ if coords:
                 st.markdown(f"- {r}")
         except Exception as e:
             st.error(f"❌ Prediction failed: {e}")
-
-
