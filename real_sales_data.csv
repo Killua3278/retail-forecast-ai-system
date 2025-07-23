@@ -13,7 +13,14 @@ data["lat"] = np.random.uniform(34.0, 42.0, n_samples)
 data["lon"] = np.random.uniform(-118.0, -73.0, n_samples)
 data["sales"] = np.random.randint(5000, 40000, n_samples)
 
-# Assemble DataFrame and save
+# Validate column structure
+required_columns = [f"f{i}" for i in range(n_features)] + ["lat", "lon", "sales"]
 real_sales_data = pd.DataFrame(data)
+
+missing_cols = set(required_columns) - set(real_sales_data.columns)
+if missing_cols:
+    raise ValueError(f"Missing columns in generated data: {missing_cols}")
+
+# Save DataFrame
 real_sales_data.to_csv("real_sales_data.csv", index=False)
-print("✅ real_sales_data.csv created successfully with 512 features + lat, lon, and sales")
+print("✅ real_sales_data.csv created successfully with all required columns")
