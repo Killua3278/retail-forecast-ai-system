@@ -67,7 +67,6 @@ try:
 except:
     st.error("Missing torchvision. Add it to requirements.txt")
 
-
 def fetch_or_upload_satellite_image(coords):
     uploaded = st.file_uploader("Upload custom satellite image", type=["jpg", "jpeg", "png"])
     if uploaded:
@@ -83,7 +82,6 @@ def fetch_or_upload_satellite_image(coords):
     except:
         return Image.new("RGB", (512, 512), color=(160, 160, 160))
 
-
 def extract_satellite_features(img):
     model = resnet18(pretrained=True)
     model.eval()
@@ -95,26 +93,21 @@ def extract_satellite_features(img):
     tensor = transform(img).unsqueeze(0)
     with torch.no_grad():
         features = model(tensor).view(1, -1).numpy().flatten()
+    features = np.resize(features, 512)  # Ensure exactly 512
     return features
-
 
 def get_safegraph_score(lat, lon):
     return np.random.uniform(0.4, 0.85)
 
-
 def fetch_social_sentiment(lat, lon):
     return np.random.randint(35, 100)
-
 
 def build_feature_vector(img, coords):
     foot_score = get_safegraph_score(*coords)
     social_score = fetch_social_sentiment(*coords)
     satellite_features = extract_satellite_features(img)
-    if satellite_features.shape[0] != 512:
-        satellite_features = np.resize(satellite_features, 512)
     features = np.concatenate([satellite_features, [coords[0], coords[1]]])
     return features, foot_score, social_score
-
 
 def get_coords_from_store_name(name):
     try:
@@ -126,7 +119,6 @@ def get_coords_from_store_name(name):
     except:
         return []
 
-
 def show_map_with_selection(options):
     st.subheader("📍 Select Your Store Location")
     m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14)
@@ -134,7 +126,6 @@ def show_map_with_selection(options):
         folium.Marker(location=[lat, lon], tooltip=label).add_to(m)
     result = st_folium(m, height=350, width=700)
     return options[0][:2] if options else None
-
 
 def save_prediction(store, coords, pred, foot, soc):
     df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
@@ -146,7 +137,6 @@ def save_prediction(store, coords, pred, foot, soc):
         except:
             st.warning("Corrupted history file. Overwriting.")
     df.to_csv("sales_history.csv", index=False)
-
 
 def plot_insights(store):
     if not os.path.exists("sales_history.csv"):
@@ -165,7 +155,6 @@ def plot_insights(store):
     avg_type = total.groupby("type")["sales"].mean().reset_index()
     st.plotly_chart(px.bar(avg_type, x="type", y="sales", title="Avg Sales by Store Type"))
     st.plotly_chart(px.pie(df, names="type", values="sales", title="Store Type Distribution"))
-
 
 def generate_recommendations(store, store_type, foot, soc, sales):
     recs = []
@@ -197,9 +186,8 @@ def generate_recommendations(store, store_type, foot, soc, sales):
 # --- Model loading and fallback ---
 def load_fallback_model():
     dummy = DummyRegressor(strategy="mean")
-    dummy.fit([[0]*514], [10000])  # give baseline
+    dummy.fit([[0]*514], [10000])
     return dummy
-
 
 def load_real_data_model():
     real_data_path = "real_sales_data.csv"
