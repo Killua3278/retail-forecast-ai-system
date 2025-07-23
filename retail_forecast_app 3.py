@@ -16,6 +16,7 @@ import torch.nn as nn
 from torchvision import transforms
 from torchvision.models import resnet18
 from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.dummy import DummyRegressor
 
@@ -98,13 +99,21 @@ def build_feature_vector(img, coords):
     ]), get_safegraph_score(*coords), fetch_social_sentiment(*coords)
 
 def get_coords_from_store_name(name, zip_code):
+    geolocator = Nominatim(user_agent="retail_ai_locator")
     try:
-        query = f"{name}, {zip_code}" if zip_code else name
-        geolocator = Nominatim(user_agent="retail_ai_locator")
-        location = geolocator.geocode(query)
+        if zip_code:
+            location = geolocator.geocode({"postalcode": zip_code, "country": "USA"}, exactly_one=True, timeout=10)
+            if location:
+                region = location.address.split(",")[1] if "," in location.address else ""
+                query = f"{name}, {region}, {zip_code}"
+            else:
+                query = f"{name}, {zip_code}"
+        else:
+            query = name
+        location = geolocator.geocode(query, timeout=10)
         if location:
             return [(location.latitude, location.longitude, location.address)]
-    except:
+    except GeocoderTimedOut:
         pass
     return []
 
