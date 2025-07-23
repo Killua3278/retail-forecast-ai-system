@@ -24,9 +24,9 @@ load_dotenv()
 st.set_page_config(page_title="Retail AI Platform", layout="wide")
 
 # --- Sidebar ---
-st.sidebar.title("🛠️ Settings")
+st.sidebar.title("🔧 Settings")
 store_type = st.sidebar.selectbox("Store Type", ["Any", "Coffee Shop", "Boutique", "Fast Food", "Other"])
-theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=0)
+theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=1)
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = (theme == "Dark")
@@ -36,24 +36,29 @@ if st.sidebar.button("🩹 Clear Sales History"):
         os.remove("sales_history.csv")
         st.sidebar.success("History cleared.")
 
-# --- Theme ---
+# --- Theme Setup ---
 def set_theme():
     dark = st.session_state.dark_mode
-    style = """
+    style = f"""
         <style>
-        body, .main, .block-container, .sidebar .sidebar-content {
-            background-color: %s !important;
-            color: %s !important;
-        }
-        .stButton>button {
-            background-color: %s;
+        body, .main, .block-container {{
+            background-color: {'#111827' if dark else '#ffffff'} !important;
+            color: {'#e5e7eb' if dark else '#111827'} !important;
+        }}
+        .stTextInput>div>div>input {{
+            background-color: {'#1f2937' if dark else 'white'} !important;
+            color: {'#e5e7eb' if dark else '#111827'} !important;
+        }}
+        .stButton>button {{
+            background-color: #6366f1;
             color: white;
-        }
-        </style>""" % ("#111827" if dark else "#ffffff", "#e5e7eb" if dark else "#111827", "#6366f1")
+        }}
+        </style>
+    """
     st.markdown(style, unsafe_allow_html=True)
 set_theme()
 
-# --- Vision & Utilities ---
+# --- Utilities ---
 def fetch_or_upload_satellite_image(coords):
     uploaded = st.file_uploader("Upload custom satellite image", type=["jpg", "jpeg", "png"])
     if uploaded:
@@ -191,7 +196,7 @@ def load_real_data_model():
         st.error(f"Model load error: {e}")
         return load_fallback_model()
 
-# --- App ---
+# --- App Execution ---
 st.title("📈 Retail AI: Forecast & Strategy")
 store = st.text_input("🏪 Store Name (e.g. Dave's Hot Chicken)")
 zip_code = st.text_input("📍 ZIP Code (optional)")
