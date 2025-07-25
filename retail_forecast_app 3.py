@@ -19,6 +19,7 @@ from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.dummy import DummyRegressor
+import time
 
 load_dotenv()
 
@@ -61,10 +62,10 @@ set_theme()
 
 # --- Simulated Public Data Functions ---
 def simulate_live_foot_traffic(lat, lon):
-    return round(np.clip((abs(hash((lat, lon))) % 100) / 100, 0.3, 0.9), 2)
+    return round(0.3 + 0.6 * abs(np.sin(lat + lon)), 2)
 
 def simulate_social_sentiment(lat, lon):
-    return round(np.clip(50 + np.sin(lat * lon % 10) * 25, 20, 95), 0)
+    return round(30 + 60 * abs(np.cos(lat * lon % 360)), 1)
 
 # --- Utilities ---
 def fetch_or_upload_satellite_image(coords):
@@ -102,8 +103,15 @@ def build_feature_vector(img, coords):
 def get_coords_from_store_name(name, zip_code):
     geolocator = Nominatim(user_agent="retail_ai_locator")
     try:
-        query = f"{name}, {zip_code}, USA" if zip_code else f"{name}, USA"
-        location = geolocator.geocode(query, exactly_one=True, timeout=10)
+        location = None
+        if zip_code:
+            zip_loc = geolocator.geocode(zip_code + ", USA", exactly_one=True, timeout=10)
+            if zip_loc:
+                location = geolocator.geocode(f"{name}, {zip_code}, USA", exactly_one=True, timeout=10)
+                if location and abs(location.latitude - zip_loc.latitude) > 0.25:
+                    return []
+        if not location:
+            location = geolocator.geocode(f"{name}, USA", exactly_one=True, timeout=10)
         if location:
             return [(location.latitude, location.longitude, location.address)]
     except GeocoderTimedOut:
@@ -150,28 +158,28 @@ def plot_insights(store):
 def generate_recommendations(store, store_type, foot, soc, sales):
     recs = []
     if foot < 0.4:
-        recs.append("Low foot traffic — consider sidewalk signage, social media shoutouts, or events to draw attention.")
+        recs.append("🚶 Low foot traffic — try sidewalk signage, local partnerships, or event hosting.")
     elif foot < 0.6:
-        recs.append("Decent traffic. Improve walk-ins with weekday flash sales and interactive window displays.")
+        recs.append("📣 Moderate traffic — boost conversion with sales banners or in-store demos.")
     else:
-        recs.append("Heavy traffic. Use loyalty programs, queue optimizations, or upsell bundles.")
+        recs.append("🏃 High traffic — capitalize with bundle deals, loyalty rewards, and express checkout.")
     if soc < 40:
-        recs.append("Weak online presence. Activate Google reviews, Instagram Reels, and influencer collabs.")
+        recs.append("📉 Weak online sentiment — improve via reviews, local hashtags, and story features.")
     elif soc < 70:
-        recs.append("Moderate engagement. Try giveaways, TikTok videos, and content collaborations.")
+        recs.append("📱 Moderate buzz — use user-generated content, flash discounts, and influencer posts.")
     else:
-        recs.append("Buzzing online. Run pop-up events and capture UGC (user-generated content).")
+        recs.append("🔥 Strong buzz — maximize with pop-ups, merch drops, or themed campaigns.")
     if store_type == "Fast Food" or "taco" in store.lower():
-        recs.append("Focus on speed: self-serve kiosks, pre-packaged deals, or lunch rush boosts.")
+        recs.append("🌮 Consider limited-time menus, fast service enhancements, or combo promotions.")
     if sales > 30000:
-        recs.append("Strong sales — reinvest into high-margin offerings or local advertising.")
+        recs.append("📈 Strong revenue — test higher-margin products or expand to nearby locations.")
     elif sales < 10000:
-        recs.append("Low revenue. Rethink pricing, visibility, and customer conversion funnel.")
+        recs.append("🔧 Low sales — revisit pricing, visibility, and upsell strategies.")
     return recs
 
 def load_fallback_model():
     dummy = DummyRegressor(strategy="mean")
-    dummy.fit([[0]*514], [10000])
+    dummy.fit([[0]*514], [15000])
     return dummy
 
 def load_real_data_model():
@@ -208,7 +216,7 @@ if store:
     if candidates:
         coords = show_map_with_selection(candidates)
     else:
-        st.warning("Location not found. Try a valid US store name + ZIP code.")
+        st.warning("Location not found or outside ZIP range.")
 
 if not coords:
     coords = show_map_with_selection([(40.7128, -74.0060, "New York (default)")])
