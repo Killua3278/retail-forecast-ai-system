@@ -16,7 +16,7 @@ import torch.nn as nn
 from torchvision import transforms
 from torchvision.models import resnet18
 from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.dummy import DummyRegressor
 import time
@@ -102,20 +102,25 @@ def build_feature_vector(img, coords):
 
 def get_coords_from_store_name(name, zip_code):
     geolocator = Nominatim(user_agent="retail_ai_locator")
-    try:
-        location = None
-        if zip_code:
-            zip_loc = geolocator.geocode(zip_code + ", USA", exactly_one=True, timeout=10)
-            if zip_loc:
-                location = geolocator.geocode(f"{name}, {zip_code}, USA", exactly_one=True, timeout=10)
-                if location and abs(location.latitude - zip_loc.latitude) > 0.25:
-                    return []
-        if not location:
-            location = geolocator.geocode(f"{name}, USA", exactly_one=True, timeout=10)
-        if location:
-            return [(location.latitude, location.longitude, location.address)]
-    except GeocoderTimedOut:
-        pass
+    def safe_geocode(query):
+        for _ in range(3):
+            try:
+                return geolocator.geocode(query, exactly_one=True, timeout=10)
+            except (GeocoderTimedOut, GeocoderUnavailable):
+                time.sleep(1)
+        return None
+
+    location = None
+    if zip_code:
+        zip_loc = safe_geocode(zip_code + ", USA")
+        if zip_loc:
+            location = safe_geocode(f"{name}, {zip_code}, USA")
+            if location and abs(location.latitude - zip_loc.latitude) > 0.25:
+                return []
+    if not location:
+        location = safe_geocode(f"{name}, USA")
+    if location:
+        return [(location.latitude, location.longitude, location.address)]
     return []
 
 def show_map_with_selection(options):
@@ -158,23 +163,23 @@ def plot_insights(store):
 def generate_recommendations(store, store_type, foot, soc, sales):
     recs = []
     if foot < 0.4:
-        recs.append("🚶 Low foot traffic — try sidewalk signage, local partnerships, or event hosting.")
+        recs.append("🚶 Low foot traffic: improve signage, host events, or offer samples outside.")
     elif foot < 0.6:
-        recs.append("📣 Moderate traffic — boost conversion with sales banners or in-store demos.")
+        recs.append("📣 Moderate traffic: highlight deals with posters or interactive ads.")
     else:
-        recs.append("🏃 High traffic — capitalize with bundle deals, loyalty rewards, and express checkout.")
+        recs.append("🏃 High traffic: introduce fast checkout or loyalty programs.")
     if soc < 40:
-        recs.append("📉 Weak online sentiment — improve via reviews, local hashtags, and story features.")
+        recs.append("📉 Weak online buzz: get Google reviews, Instagram stories, or TikTok reels.")
     elif soc < 70:
-        recs.append("📱 Moderate buzz — use user-generated content, flash discounts, and influencer posts.")
+        recs.append("📱 Mid buzz: promote giveaways, contests, and respond to reviews.")
     else:
-        recs.append("🔥 Strong buzz — maximize with pop-ups, merch drops, or themed campaigns.")
+        recs.append("🔥 Viral presence: host flash sales or create exclusive merch.")
     if store_type == "Fast Food" or "taco" in store.lower():
-        recs.append("🌮 Consider limited-time menus, fast service enhancements, or combo promotions.")
+        recs.append("🌮 Fast service needed: add kiosks, streamline menus, or app ordering.")
     if sales > 30000:
-        recs.append("📈 Strong revenue — test higher-margin products or expand to nearby locations.")
+        recs.append("📊 High revenue: expand top sellers, test new markets, or increase ad spend.")
     elif sales < 10000:
-        recs.append("🔧 Low sales — revisit pricing, visibility, and upsell strategies.")
+        recs.append("⚖️ Low sales: revise pricing, improve conversion funnel, or drive walk-ins.")
     return recs
 
 def load_fallback_model():
