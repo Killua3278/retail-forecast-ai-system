@@ -19,6 +19,7 @@ from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.dummy import DummyRegressor
+import tweepy
 
 load_dotenv()
 
@@ -32,7 +33,7 @@ theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=1)
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = (theme == "Dark")
 
-if st.sidebar.button("🩹 Clear Sales History"):
+if st.sidebar.button("🥩 Clear Sales History"):
     if os.path.exists("sales_history.csv"):
         os.remove("sales_history.csv")
         st.sidebar.success("History cleared.")
@@ -91,7 +92,18 @@ def get_safegraph_score(lat, lon):
     return np.random.uniform(0.4, 0.85)
 
 def fetch_social_sentiment(lat, lon):
-    return np.random.randint(35, 100)
+    try:
+        bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
+        if not bearer_token:
+            raise ValueError("Missing Twitter Bearer Token")
+        client = tweepy.Client(bearer_token=bearer_token)
+        query = f"retail OR store OR shopping point_radius:[{lon} {lat} 10km]"
+        tweets = client.search_recent_tweets(query=query, tweet_fields=["public_metrics"], max_results=50)
+        engagement = sum(tweet.public_metrics["like_count"] + tweet.public_metrics["retweet_count"] for tweet in tweets.data) if tweets.data else 0
+        return min(100, int(engagement / 10))
+    except Exception as e:
+        st.warning(f"Using fallback social score (error: {e})")
+        return np.random.randint(35, 100)
 
 def build_feature_vector(img, coords):
     return np.concatenate([
@@ -101,17 +113,9 @@ def build_feature_vector(img, coords):
 def get_coords_from_store_name(name, zip_code):
     geolocator = Nominatim(user_agent="retail_ai_locator")
     try:
-        if zip_code:
-            location = geolocator.geocode({"postalcode": zip_code, "country": "USA"}, exactly_one=True, timeout=10)
-            if location:
-                region = location.address.split(",")[1] if "," in location.address else ""
-                query = f"{name}, {region}, {zip_code}"
-            else:
-                query = f"{name}, {zip_code}"
-        else:
-            query = name
-        location = geolocator.geocode(query, timeout=10)
-        if location:
+        query = f"{name}, {zip_code}, USA" if zip_code else f"{name}, USA"
+        location = geolocator.geocode(query, exactly_one=True, timeout=10)
+        if location and zip_code in location.address:
             return [(location.latitude, location.longitude, location.address)]
     except GeocoderTimedOut:
         pass
@@ -157,24 +161,24 @@ def plot_insights(store):
 def generate_recommendations(store, store_type, foot, soc, sales):
     recs = []
     if foot < 0.4:
-        recs.append("🔻 Low foot traffic. Consider mobile ads or joining delivery platforms.")
+        recs.append("Low traffic. Try event marketing, referral programs, and visibility boosting collaborations.")
     elif foot < 0.6:
-        recs.append("🚶‍♂️ Average traffic. Use signage or in-store events.")
+        recs.append("Mid-level footfall. Offer weekday lunch discounts, post signage nearby, optimize store hours.")
     else:
-        recs.append("🚦 High traffic. Push time-limited combos or flash sales.")
+        recs.append("High traffic! Focus on conversion: upsell combos, train staff for speed, highlight reviews.")
     if soc < 40:
-        recs.append("📉 Weak social presence. Post reels, behind-the-scenes, promos.")
+        recs.append("Weak online presence. Post customer stories, reply to Google reviews, engage local hashtags.")
     elif soc < 70:
-        recs.append("📱 Moderate engagement. Add stories and location tags.")
+        recs.append("Growing buzz. Go live on social weekly, launch shareable content, spotlight customers.")
     else:
-        recs.append("📢 Great buzz. Offer referral or influencer rewards.")
+        recs.append("Strong buzz. Collaborate with influencers, run flash sales, tie online content to foot traffic.")
     if store_type == "Fast Food" or "taco" in store.lower():
-        recs.append("🌮 Optimize peak lunch and dinner rush with ready-to-go inventory.")
+        recs.append("Optimize peak service: prep meals in advance, use drive-thru tech, track lunchtime trends.")
     if sales > 30000:
-        recs.append("📈 High sales. Test new premium items or expand inventory.")
+        recs.append("Strong revenue. Reinvest in premium items, local ads, or new site scouting.")
     elif sales < 10000:
-        recs.append("🔍 Low performance. Benchmark neighbors, improve window appeal.")
-    recs.append("🧠 Tip: Track customer favorites, even on paper, to personalize deals.")
+        recs.append("Revenue lag. Test new pricing, reposition offerings, redo product displays.")
+    recs.append("Always survey repeat customers. Loyalty can reveal which products deserve spotlight.")
     return recs
 
 def load_fallback_model():
@@ -216,7 +220,7 @@ if store:
     if candidates:
         coords = show_map_with_selection(candidates)
     else:
-        st.warning("Location not found. Defaulting to New York.")
+        st.warning("Location not found. Please enter a valid US store name and ZIP code.")
 
 if not coords:
     coords = show_map_with_selection([(40.7128, -74.0060, "New York (default)")])
