@@ -104,7 +104,7 @@ def get_coords_from_store_name(name, zip_code):
     try:
         query = f"{name}, {zip_code}, USA" if zip_code else f"{name}, USA"
         location = geolocator.geocode(query, exactly_one=True, timeout=10)
-        if location and zip_code in location.address:
+        if location:
             return [(location.latitude, location.longitude, location.address)]
     except GeocoderTimedOut:
         pass
@@ -150,24 +150,23 @@ def plot_insights(store):
 def generate_recommendations(store, store_type, foot, soc, sales):
     recs = []
     if foot < 0.4:
-        recs.append("🔻 Low foot traffic. Try hosting local events, offering discounts, and partnering with nearby stores.")
+        recs.append("Low foot traffic — consider sidewalk signage, social media shoutouts, or events to draw attention.")
     elif foot < 0.6:
-        recs.append("🚶‍♂️ Average traffic. Use signage, weekday specials, and community boards.")
+        recs.append("Decent traffic. Improve walk-ins with weekday flash sales and interactive window displays.")
     else:
-        recs.append("🚦 High traffic. Push flash deals, loyalty cards, and bundle promos.")
+        recs.append("Heavy traffic. Use loyalty programs, queue optimizations, or upsell bundles.")
     if soc < 40:
-        recs.append("📉 Low social buzz. Post reviews, events, and behind-the-scenes clips.")
+        recs.append("Weak online presence. Activate Google reviews, Instagram Reels, and influencer collabs.")
     elif soc < 70:
-        recs.append("📱 Moderate engagement. Try stories, hashtags, and contests.")
+        recs.append("Moderate engagement. Try giveaways, TikTok videos, and content collaborations.")
     else:
-        recs.append("📢 Good buzz. Offer influencer collabs or referral programs.")
+        recs.append("Buzzing online. Run pop-up events and capture UGC (user-generated content).")
     if store_type == "Fast Food" or "taco" in store.lower():
-        recs.append("🌮 Optimize rush hours with efficient lines and ready meals.")
+        recs.append("Focus on speed: self-serve kiosks, pre-packaged deals, or lunch rush boosts.")
     if sales > 30000:
-        recs.append("📊 Strong sales. Consider scaling, new SKUs, or extended hours.")
+        recs.append("Strong sales — reinvest into high-margin offerings or local advertising.")
     elif sales < 10000:
-        recs.append("🔍 Investigate pricing, competition, and footpath visibility.")
-    recs.append("🧠 Keep logs of top-selling items and review weekly.")
+        recs.append("Low revenue. Rethink pricing, visibility, and customer conversion funnel.")
     return recs
 
 def load_fallback_model():
@@ -199,7 +198,7 @@ def load_real_data_model():
         return load_fallback_model()
 
 # --- App Execution ---
-st.title("📈 Retail AI: Forecast & Strategy")
+st.title("📊 Retail AI: Forecast & Strategy")
 store = st.text_input("🏪 Store Name (e.g. Dave's Hot Chicken)")
 zip_code = st.text_input("📍 ZIP Code (optional)")
 coords = None
