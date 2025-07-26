@@ -130,7 +130,21 @@ def build_feature_vector(img, coords, store, zip_code):
     return features, foot, soc
 
 # --- Geolocation ---
+# ✅ FIX: Robust geolocation ZIP matching using Yelp (fallback to Nominatim)
+
 def get_coords_from_store_name(name, zip_code):
+    if not name:
+        return []
+
+    # --- Attempt Yelp location match first ---
+    business = search_yelp_business(name, zip_code if zip_code else "USA")
+    if business:
+        coords = business.get("coordinates", {})
+        lat, lon = coords.get("latitude"), coords.get("longitude")
+        if lat and lon:
+            return [(lat, lon, business.get("name") + ", " + business.get("location", {}).get("address1", "Yelp location"))]
+
+    # --- Fallback to Nominatim + ZIP radius filtering ---
     geolocator = Nominatim(user_agent="retail_ai_locator")
     def safe_geocode(query):
         for _ in range(3):
@@ -140,23 +154,19 @@ def get_coords_from_store_name(name, zip_code):
                 time.sleep(1)
         return None
 
-    if not name:
-        return []
+    zip_location = safe_geocode(f"{zip_code}, USA") if zip_code else None
+    full_query = f"{name}, {zip_code}, USA" if zip_code else f"{name}, USA"
+    name_location = safe_geocode(full_query)
 
-    location = None
-    if zip_code:
-        zip_only = safe_geocode(f"{zip_code}, USA")
-        if zip_only:
-            location = safe_geocode(f"{name}, {zip_code}, USA")
-            if location:
-                dist = np.sqrt((location.latitude - zip_only.latitude)**2 + (location.longitude - zip_only.longitude)**2)
-                if dist > 0.1:
-                    return []
-                return [(location.latitude, location.longitude, location.address)]
-    location = safe_geocode(f"{name}, USA")
-    if location:
-        return [(location.latitude, location.longitude, location.address)]
+    if name_location and zip_location:
+        dist = np.sqrt((name_location.latitude - zip_location.latitude)**2 + (name_location.longitude - zip_location.longitude)**2)
+        if dist > 0.3:  # approx 30–35 km tolerance
+            return []
+
+    if name_location:
+        return [(name_location.latitude, name_location.longitude, name_location.address)]
     return []
+
 
 def show_map_with_selection(options):
     st.subheader("📍 Select Your Store Location")
