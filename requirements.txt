@@ -12,3 +12,4 @@ folium
 python-dotenv
 geopy
 streamlit-folium
+beautifulsoup4
