@@ -60,7 +60,7 @@ def set_theme():
     st.markdown(style, unsafe_allow_html=True)
 set_theme()
 
-# --- Simulated Public Data Functions ---
+# --- Simulated Public Data Functions (replace with real APIs later) ---
 def simulate_live_foot_traffic(lat, lon):
     return round(0.3 + 0.6 * abs(np.sin(lat + lon)), 2)
 
@@ -110,15 +110,20 @@ def get_coords_from_store_name(name, zip_code):
                 time.sleep(1)
         return None
 
+    if not name:
+        return []
+
     location = None
     if zip_code:
-        zip_loc = safe_geocode(zip_code + ", USA")
-        if zip_loc:
+        zip_only = safe_geocode(f"{zip_code}, USA")
+        if zip_only:
             location = safe_geocode(f"{name}, {zip_code}, USA")
-            if location and abs(location.latitude - zip_loc.latitude) > 0.25:
-                return []
-    if not location:
-        location = safe_geocode(f"{name}, USA")
+            if location:
+                dist = np.sqrt((location.latitude - zip_only.latitude)**2 + (location.longitude - zip_only.longitude)**2)
+                if dist > 0.1:  # ~11km
+                    return []
+                return [(location.latitude, location.longitude, location.address)]
+    location = safe_geocode(f"{name}, USA")
     if location:
         return [(location.latitude, location.longitude, location.address)]
     return []
@@ -163,28 +168,31 @@ def plot_insights(store):
 def generate_recommendations(store, store_type, foot, soc, sales):
     recs = []
     if foot < 0.4:
-        recs.append("🚶 Low foot traffic: improve signage, host events, or offer samples outside.")
+        recs.append("🚶 Low foot traffic: partner with nearby popular stores, run sidewalk events, or local ad placements.")
     elif foot < 0.6:
-        recs.append("📣 Moderate traffic: highlight deals with posters or interactive ads.")
+        recs.append("📣 Moderate traffic: promote lunch-hour specials or limited-time bundles to convert passersby.")
     else:
-        recs.append("🏃 High traffic: introduce fast checkout or loyalty programs.")
+        recs.append("🏃 High traffic: consider loyalty programs, quick upsell items, and bundle promotions.")
+
     if soc < 40:
-        recs.append("📉 Weak online buzz: get Google reviews, Instagram stories, or TikTok reels.")
+        recs.append("📉 Weak online buzz: invest in influencer partnerships, boost local SEO, and request customer reviews.")
     elif soc < 70:
-        recs.append("📱 Mid buzz: promote giveaways, contests, and respond to reviews.")
+        recs.append("📱 Mid buzz: A/B test ads on Meta or TikTok, run flash promo codes.")
     else:
-        recs.append("🔥 Viral presence: host flash sales or create exclusive merch.")
+        recs.append("🔥 Viral presence: maximize buzz with limited merch drops or exclusive loyalty rewards.")
+
     if store_type == "Fast Food" or "taco" in store.lower():
-        recs.append("🌮 Fast service needed: add kiosks, streamline menus, or app ordering.")
+        recs.append("🌮 Fast service needed: introduce drive-through optimizations, self-ordering kiosks, or mobile-first menus.")
+
     if sales > 30000:
-        recs.append("📊 High revenue: expand top sellers, test new markets, or increase ad spend.")
+        recs.append("📊 High revenue: explore adjacent product lines, open satellite locations, and optimize supplier costs.")
     elif sales < 10000:
-        recs.append("⚖️ Low sales: revise pricing, improve conversion funnel, or drive walk-ins.")
+        recs.append("⚖️ Low sales: pivot marketing to niche audiences, review price/value perception, and offer trials or samples.")
     return recs
 
 def load_fallback_model():
-    dummy = DummyRegressor(strategy="mean")
-    dummy.fit([[0]*514], [15000])
+    dummy = DummyRegressor(strategy="constant", constant=np.random.randint(10000, 30000))
+    dummy.fit([[0]*514], [dummy.constant])
     return dummy
 
 def load_real_data_model():
@@ -243,3 +251,4 @@ if coords:
                 st.markdown(f"- {r}")
         except Exception as e:
             st.error(f"❌ Prediction failed: {e}")
+
