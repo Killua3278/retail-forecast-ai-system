@@ -1,4 +1,4 @@
-# ✅ Fully Integrated Retail AI App with Yelp & ZIP Features
+# ✅ Fully Integrated Retail AI App with Yelp, ZIP, Satellite, and Strategy Intelligence
 
 # --- Imports and Setup ---
 import streamlit as st
@@ -22,17 +22,52 @@ from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.dummy import DummyRegressor
 import time
-import json
 from bs4 import BeautifulSoup
 
 load_dotenv()
 
 st.set_page_config(page_title="Retail AI Platform", layout="wide")
 
-# --- Yelp + ZIP Integration ---
+# --- API Keys ---
 YELP_API_KEY = os.getenv("YELP_API_KEY")
 YELP_HEADERS = {"Authorization": f"Bearer {YELP_API_KEY}"}
 
+# --- Sidebar ---
+st.sidebar.title("🔧 Settings")
+store_type = st.sidebar.selectbox("Store Type", ["Any", "Coffee Shop", "Boutique", "Fast Food", "Other"])
+theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=1)
+
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = (theme == "Dark")
+
+if st.sidebar.button("🥩 Clear Sales History"):
+    if os.path.exists("sales_history.csv"):
+        os.remove("sales_history.csv")
+        st.sidebar.success("History cleared.")
+
+# --- Theme Styling ---
+def set_theme():
+    dark = st.session_state.dark_mode
+    style = f"""
+        <style>
+        body, .main, .block-container {{
+            background-color: {'#111827' if dark else '#ffffff'} !important;
+            color: {'#e5e7eb' if dark else '#111827'} !important;
+        }}
+        .stTextInput>div>div>input {{
+            background-color: {'#1f2937' if dark else 'white'} !important;
+            color: {'#e5e7eb' if dark else '#111827'} !important;
+        }}
+        .stButton>button {{
+            background-color: #6366f1;
+            color: white;
+        }}
+        </style>
+    """
+    st.markdown(style, unsafe_allow_html=True)
+set_theme()
+
+# --- Yelp & Traffic ---
 def search_yelp_business(name, location):
     url = "https://api.yelp.com/v3/businesses/search"
     params = {"term": name, "location": location, "limit": 1}
@@ -59,42 +94,49 @@ def get_mock_placer_traffic(zip_code):
     hashval = sum(ord(c) for c in zip_code) % 10
     return round(0.3 + 0.05 * hashval, 2)
 
-# --- Sidebar ---
-st.sidebar.title("🔧 Settings")
-store_type = st.sidebar.selectbox("Store Type", ["Any", "Coffee Shop", "Boutique", "Fast Food", "Other"])
-theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=1)
+# --- Geolocation ---
+def get_coords_from_store_name(name, zip_code):
+    if not name:
+        return []
 
-if "dark_mode" not in st.session_state:
-    st.session_state.dark_mode = (theme == "Dark")
+    business = search_yelp_business(name, zip_code if zip_code else "USA")
+    if business:
+        coords = business.get("coordinates", {})
+        lat, lon = coords.get("latitude"), coords.get("longitude")
+        if lat and lon:
+            return [(lat, lon, business.get("name") + ", " + business.get("location", {}).get("address1", "Yelp location"))]
 
-if st.sidebar.button("🥩 Clear Sales History"):
-    if os.path.exists("sales_history.csv"):
-        os.remove("sales_history.csv")
-        st.sidebar.success("History cleared.")
+    geolocator = Nominatim(user_agent="retail_ai_locator")
+    def safe_geocode(query):
+        for _ in range(3):
+            try:
+                return geolocator.geocode(query, exactly_one=True, timeout=10)
+            except (GeocoderTimedOut, GeocoderUnavailable):
+                time.sleep(1)
+        return None
 
-# --- Theme Setup ---
-def set_theme():
-    dark = st.session_state.dark_mode
-    style = f"""
-        <style>
-        body, .main, .block-container {{
-            background-color: {'#111827' if dark else '#ffffff'} !important;
-            color: {'#e5e7eb' if dark else '#111827'} !important;
-        }}
-        .stTextInput>div>div>input {{
-            background-color: {'#1f2937' if dark else 'white'} !important;
-            color: {'#e5e7eb' if dark else '#111827'} !important;
-        }}
-        .stButton>button {{
-            background-color: #6366f1;
-            color: white;
-        }}
-        </style>
-    """
-    st.markdown(style, unsafe_allow_html=True)
-set_theme()
+    zip_location = safe_geocode(f"{zip_code}, USA") if zip_code else None
+    full_query = f"{name}, {zip_code}, USA" if zip_code else f"{name}, USA"
+    name_location = safe_geocode(full_query)
 
-# --- Satellite and Feature Engineering ---
+    if name_location and zip_location:
+        dist = np.sqrt((name_location.latitude - zip_location.latitude)**2 + (name_location.longitude - zip_location.longitude)**2)
+        if dist > 0.3:
+            return []
+
+    if name_location:
+        return [(name_location.latitude, name_location.longitude, name_location.address)]
+    return []
+
+def show_map_with_selection(options):
+    st.subheader("📍 Select Your Store Location")
+    m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14)
+    for lat, lon, label in options:
+        folium.Marker(location=[lat, lon], tooltip=label).add_to(m)
+    st_folium(m, height=350, width=700)
+    return options[0][:2]
+
+# --- Satellite & Feature Engineering ---
 def fetch_or_upload_satellite_image(coords):
     uploaded = st.file_uploader("Upload custom satellite image", type=["jpg", "jpeg", "png"])
     if uploaded:
@@ -129,83 +171,30 @@ def build_feature_vector(img, coords, store, zip_code):
     soc = get_yelp_sentiment_score(business)
     return features, foot, soc
 
-# --- Geolocation ---
-# ✅ FIX: Robust geolocation ZIP matching using Yelp (fallback to Nominatim)
-
-def get_coords_from_store_name(name, zip_code):
-    if not name:
-        return []
-
-    # --- Attempt Yelp location match first ---
-    business = search_yelp_business(name, zip_code if zip_code else "USA")
-    if business:
-        coords = business.get("coordinates", {})
-        lat, lon = coords.get("latitude"), coords.get("longitude")
-        if lat and lon:
-            return [(lat, lon, business.get("name") + ", " + business.get("location", {}).get("address1", "Yelp location"))]
-
-    # --- Fallback to Nominatim + ZIP radius filtering ---
-    geolocator = Nominatim(user_agent="retail_ai_locator")
-    def safe_geocode(query):
-        for _ in range(3):
-            try:
-                return geolocator.geocode(query, exactly_one=True, timeout=10)
-            except (GeocoderTimedOut, GeocoderUnavailable):
-                time.sleep(1)
-        return None
-
-    zip_location = safe_geocode(f"{zip_code}, USA") if zip_code else None
-    full_query = f"{name}, {zip_code}, USA" if zip_code else f"{name}, USA"
-    name_location = safe_geocode(full_query)
-
-    if name_location and zip_location:
-        dist = np.sqrt((name_location.latitude - zip_location.latitude)**2 + (name_location.longitude - zip_location.longitude)**2)
-        if dist > 0.3:  # approx 30–35 km tolerance
-            return []
-
-    if name_location:
-        return [(name_location.latitude, name_location.longitude, name_location.address)]
-    return []
-
-
-def show_map_with_selection(options):
-    st.subheader("📍 Select Your Store Location")
-    m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14)
-    for lat, lon, label in options:
-        folium.Marker(location=[lat, lon], tooltip=label).add_to(m)
-    st_folium(m, height=350, width=700)
-    return options[0][:2]
-
-# --- Model + Prediction Logic ---
+# --- Model & Prediction ---
 def load_fallback_model():
     dummy = DummyRegressor(strategy="constant", constant=np.random.randint(10000, 30000))
     dummy.fit([[0]*514], [dummy.constant])
     return dummy
 
 def load_real_data_model():
-    real_data_path = "real_sales_data.csv"
-    expected_cols = [f"f{i}" for i in range(512)] + ["lat", "lon", "sales"]
+    path = "real_sales_data.csv"
     if os.path.exists("model.pkl"):
         return joblib.load("model.pkl")
-    if not os.path.exists(real_data_path):
-        st.warning("real_sales_data.csv not found. Using fallback model.")
+    if not os.path.exists(path):
         return load_fallback_model()
     try:
-        df = pd.read_csv(real_data_path)
-        if not all(col in df.columns for col in expected_cols):
-            st.error("real_sales_data.csv missing required columns")
-            return load_fallback_model()
+        df = pd.read_csv(path)
         X = df[[f"f{i}" for i in range(512)] + ["lat", "lon"]]
         y = df["sales"]
         model = GradientBoostingRegressor()
         model.fit(X, y)
         joblib.dump(model, "model.pkl")
         return model
-    except Exception as e:
-        st.error(f"Model load error: {e}")
+    except:
         return load_fallback_model()
 
-# --- Save + Visualize ---
+# --- Save & Visualize ---
 def save_prediction(store, coords, pred, foot, soc):
     df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
                       columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
@@ -224,44 +213,42 @@ def plot_insights(store):
         df = pd.read_csv("sales_history.csv", on_bad_lines='skip')
     except:
         return st.warning("Could not read history file.")
-    df = df[df["store"].astype(str).str.lower() == store.lower()]
+    df = df[df["store"].str.lower() == store.lower()]
     if df.empty:
         return st.warning("No data found.")
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     st.plotly_chart(px.line(df, x="timestamp", y="sales", title="Sales Over Time"))
     st.plotly_chart(px.area(df, x="timestamp", y=["foot", "social"], title="Foot Traffic & Social Buzz"))
-    total = pd.read_csv("sales_history.csv", on_bad_lines='skip')
-    avg_type = total.groupby("type")["sales"].mean().reset_index()
+    avg_type = df.groupby("type")["sales"].mean().reset_index()
     st.plotly_chart(px.bar(avg_type, x="type", y="sales", title="Avg Sales by Store Type"))
-    st.plotly_chart(px.pie(df, names="type", values="sales", title="Store Type Distribution"))
 
-# --- Strategic Advice ---
+# --- Strategy Engine ---
 def generate_recommendations(store, store_type, foot, soc, sales):
-    recs = []
+    r = []
     if foot < 0.4:
-        recs.append("🚶 Low foot traffic: partner with nearby popular stores, run sidewalk events, or local ad placements.")
+        r.append("🚶 Low traffic: partner with nearby stores or run sidewalk ads.")
     elif foot < 0.6:
-        recs.append("📣 Moderate traffic: promote lunch-hour specials or limited-time bundles to convert passersby.")
+        r.append("📣 Mid traffic: bundle promotions or promote peak hours.")
     else:
-        recs.append("🏃 High traffic: consider loyalty programs, quick upsell items, and bundle promotions.")
+        r.append("🏃 High traffic: loyalty points, upsells, or QR campaigns.")
 
     if soc < 40:
-        recs.append("📉 Weak online buzz: invest in influencer partnerships, boost local SEO, and request customer reviews.")
+        r.append("📉 Weak online buzz: boost local SEO, ask for reviews.")
     elif soc < 70:
-        recs.append("📱 Mid buzz: A/B test ads on Meta or TikTok, run flash promo codes.")
+        r.append("📱 Moderate buzz: run flash TikTok/Meta ads.")
     else:
-        recs.append("🔥 Viral presence: maximize buzz with limited merch drops or exclusive loyalty rewards.")
+        r.append("🔥 Viral: limited merch drops or exclusive loyalty rewards.")
 
     if store_type == "Fast Food" or "taco" in store.lower():
-        recs.append("🌮 Fast service needed: introduce drive-through optimizations, self-ordering kiosks, or mobile-first menus.")
+        r.append("🌮 Fast food: optimize wait time & kiosk ordering.")
 
     if sales > 30000:
-        recs.append("📊 High revenue: explore adjacent product lines, open satellite locations, and optimize supplier costs.")
+        r.append("📊 High revenue: expand locations or upscale menus.")
     elif sales < 10000:
-        recs.append("⚖️ Low sales: pivot marketing to niche audiences, review price/value perception, and offer trials or samples.")
-    return recs
+        r.append("⚖️ Low revenue: run free trials or price/value testing.")
+    return r
 
-# --- App Execution ---
+# --- Main App Execution ---
 st.title("📊 Retail AI: Forecast & Strategy")
 store = st.text_input("🏪 Store Name (e.g. Dave's Hot Chicken)")
 zip_code = st.text_input("📍 ZIP Code (optional)")
@@ -272,7 +259,7 @@ if store:
     if candidates:
         coords = show_map_with_selection(candidates)
     else:
-        st.warning("Location not found or outside ZIP range.")
+        st.warning("Location not found or outside ZIP radius.")
 
 if not coords:
     coords = show_map_with_selection([(40.7128, -74.0060, "New York (default)")])
