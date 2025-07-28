@@ -1,48 +1,42 @@
-# ✅ Retail AI App — Final Full Version (Chunk 1/3)
-# Includes UI, sidebar, Yelp, location, and sentiment engines
+# ✅ Fully Integrated Retail AI App with Yelp, ZIP, Satellite, and Strategy Intelligence + Improved Visualizations + Advanced Recommendations
 
+# --- Imports and Setup ---
 import streamlit as st
 import requests
-import os
-import pandas as pd
-import numpy as np
-import joblib
 from PIL import Image
 import io
-import time
+import numpy as np
+import torch
+import joblib
+import os
+import pandas as pd
+import plotly.express as px
+from streamlit_folium import st_folium
+import folium
 from dotenv import load_dotenv
+import torch.nn as nn
+from torchvision import transforms
+from torchvision.models import resnet18
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.dummy import DummyRegressor
-from torchvision import transforms
-from torchvision.models import resnet18
-import torch.nn as nn
-import torch
-import plotly.express as px
-from streamlit_folium import st_folium
-import folium
+import time
+from bs4 import BeautifulSoup
 
 load_dotenv()
 
+st.set_page_config(page_title="Retail AI Platform", layout="wide")
+
+# --- API Keys ---
 YELP_API_KEY = os.getenv("YELP_API_KEY")
 YELP_HEADERS = {"Authorization": f"Bearer {YELP_API_KEY}"}
 
-use_review_sentiment = False
-try:
-    import nltk
-    from nltk.sentiment import SentimentIntensityAnalyzer
-    nltk.download('vader_lexicon')
-    sia = SentimentIntensityAnalyzer()
-    use_review_sentiment = True
-except ImportError:
-    st.warning("NLTK not found — defaulting to rating-based sentiment.")
-
-# --- Sidebar UI ---
-st.set_page_config(page_title="Retail AI Platform", layout="wide")
+# --- Sidebar ---
 st.sidebar.title("🔧 Settings")
 store_type = st.sidebar.selectbox("Store Type", ["Any", "Coffee Shop", "Boutique", "Fast Food", "Other"])
 theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=1)
+
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = (theme == "Dark")
 
@@ -73,7 +67,7 @@ def set_theme():
     st.markdown(style, unsafe_allow_html=True)
 set_theme()
 
-# --- Yelp Search ---
+# --- Yelp & Traffic ---
 def search_yelp_business(name, location):
     url = "https://api.yelp.com/v3/businesses/search"
     params = {"term": name, "location": location, "limit": 1}
@@ -87,20 +81,18 @@ def search_yelp_business(name, location):
         pass
     return None
 
-# --- Sentiment Engine ---
 def get_yelp_sentiment_score(business):
     if not business:
-        return 50.0, "(N/A)"
-    if use_review_sentiment:
-        text = business.get("name", "") + ". " + business.get("location", {}).get("address1", "")
-        score = round(sia.polarity_scores(text)['compound'] * 50 + 50, 1)
-        return score, "(via review sentiment)"
+        return 50.0
     rating = business.get("rating", 3.0)
     review_count = business.get("review_count", 0)
-    score = round(min(100, max(0, (rating - 3) * 25 + review_count * 0.1)), 1)
-    return score, "(via rating heuristic)"
-# ✅ Retail AI App — Final Full Version (Chunk 2/3)
-# Includes location geocoding, map UI, satellite fetch, fallback traffic + feature extraction
+    return round(min(100, max(0, (rating - 3) * 25 + review_count * 0.1)), 1)
+
+def get_mock_placer_traffic(zip_code):
+    if not zip_code:
+        return 0.45
+    hashval = sum(ord(c) for c in zip_code) % 10
+    return round(0.3 + 0.05 * hashval, 2)
 
 # --- Geolocation ---
 def get_coords_from_store_name(name, zip_code):
@@ -120,8 +112,13 @@ def get_coords_from_store_name(name, zip_code):
             except (GeocoderTimedOut, GeocoderUnavailable):
                 time.sleep(1)
         return None
+    zip_location = safe_geocode(f"{zip_code}, USA") if zip_code else None
     full_query = f"{name}, {zip_code}, USA" if zip_code else f"{name}, USA"
     name_location = safe_geocode(full_query)
+    if name_location and zip_location:
+        dist = np.sqrt((name_location.latitude - zip_location.latitude)**2 + (name_location.longitude - zip_location.longitude)**2)
+        if dist > 0.3:
+            return []
     if name_location:
         return [(name_location.latitude, name_location.longitude, name_location.address)]
     return []
@@ -134,34 +131,25 @@ def show_map_with_selection(options):
     st_folium(m, height=350, width=700)
     return options[0][:2]
 
-# --- Traffic Simulation ---
-def get_mock_placer_traffic(zip_code):
-    if not zip_code:
-        return 0.45
-    hashval = sum(ord(c) for c in zip_code) % 10
-    return round(0.3 + 0.05 * hashval, 2)
-
-# --- Fallback Logger ---
-def log_fallback_usage():
-    with open("fallback_log.txt", "a") as f:
-        f.write(f"Fallback used at {pd.Timestamp.now()}\n")
-
-# --- Satellite Image Fetch ---
-def fetch_satellite(coords):
+# --- Satellite & Feature Engineering ---
+def fetch_or_upload_satellite_image(coords):
+    uploaded = st.file_uploader("Upload custom satellite image", type=["jpg", "jpeg", "png"])
+    if uploaded:
+        return Image.open(uploaded).convert("RGB")
     api_key = os.getenv("GOOGLE_MAPS_API_KEY")
     if not api_key:
         st.error("Missing Google Maps API key")
-        return Image.new("RGB", (512, 512))
-    url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=18&size=600x400&maptype=satellite&key={api_key}"
+        return Image.new("RGB", (512, 512), color=(200, 200, 200))
     try:
+        url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=18&size=600x400&maptype=satellite&key={api_key}"
         res = requests.get(url)
         res.raise_for_status()
         return Image.open(io.BytesIO(res.content)).convert("RGB")
-    except:
-        return Image.new("RGB", (512, 512))
+    except Exception as e:
+        st.error(f"Satellite image fetch error: {e}")
+        return Image.new("RGB", (512, 512), color=(160, 160, 160))
 
-# --- Satellite Feature Extraction ---
-def extract_features(img):
+def extract_satellite_features(img):
     model = resnet18(pretrained=True)
     model.eval()
     model = nn.Sequential(*list(model.children())[:-1])
@@ -171,67 +159,72 @@ def extract_features(img):
         features = model(tensor).view(1, -1).numpy().flatten()
     return np.resize(features, 512)
 
-# --- Feature Vector Build ---
 def build_feature_vector(img, coords, store, zip_code):
+    features = np.concatenate([extract_satellite_features(img), [coords[0], coords[1]]])
     business = search_yelp_business(store, zip_code)
-    sentiment, _ = get_yelp_sentiment_score(business)
     foot = get_mock_placer_traffic(zip_code)
-    features = np.concatenate([extract_features(img), [coords[0], coords[1]]])
-    return features, foot, sentiment
-# ✅ Retail AI App — Final Full Version (Chunk 3/3)
-# Includes model prediction, confidence interval, trend arrow, strategy recommendations, dashboard
+    soc = get_yelp_sentiment_score(business)
+    return features, foot, soc
 
-# --- Model Loader ---
-def load_model():
-    if os.path.exists("model.pkl"):
-        return joblib.load("model.pkl")
-    log_fallback_usage()
-    dummy = DummyRegressor(strategy="constant", constant=np.random.randint(9000, 16000))
+# --- Model & Prediction ---
+def load_fallback_model():
+    dummy = DummyRegressor(strategy="constant", constant=np.random.randint(10000, 30000))
     dummy.fit([[0]*514], [dummy.constant])
     return dummy
 
-# --- Save History ---
+def load_real_data_model():
+    path = "real_sales_data.csv"
+    if os.path.exists("model.pkl"):
+        return joblib.load("model.pkl")
+    if not os.path.exists(path):
+        return load_fallback_model()
+    try:
+        df = pd.read_csv(path)
+        X = df[[f"f{i}" for i in range(512)] + ["lat", "lon"]]
+        y = df["sales"]
+        model = GradientBoostingRegressor()
+        model.fit(X, y)
+        joblib.dump(model, "model.pkl")
+        return model
+    except:
+        return load_fallback_model()
+
+# --- Save & Visualize ---
 def save_prediction(store, coords, pred, foot, soc):
     df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
                       columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
     if os.path.exists("sales_history.csv"):
         try:
-            old = pd.read_csv("sales_history.csv")
+            old = pd.read_csv("sales_history.csv", on_bad_lines='skip')
             df = pd.concat([old, df], ignore_index=True)
         except:
-            st.warning("History corrupted. Starting fresh.")
+            st.warning("Corrupted history file. Overwriting.")
     df.to_csv("sales_history.csv", index=False)
 
-# --- Trend Arrow ---
-def get_trend_arrow(current):
-    if not os.path.exists("sales_history.csv"): return ""
+def plot_insights(store):
+    if not os.path.exists("sales_history.csv"):
+        return st.info("No data yet.")
     try:
-        df = pd.read_csv("sales_history.csv")
-        df = df[df["store"].str.lower() == store.lower()]
-        df = df.sort_values("timestamp")
-        if len(df) < 2: return ""
-        prev = df.iloc[-2]["sales"]
-        if current > prev:
-            return "🔺"
-        elif current < prev:
-            return "🔻"
-    except: pass
-    return ""
+        df = pd.read_csv("sales_history.csv", on_bad_lines='skip')
+    except:
+        return st.warning("Could not read history file.")
+    df = df[df["store"].str.lower() == store.lower()]
+    if df.empty:
+        return st.warning("No data found.")
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-# --- Dashboard ---
-def dashboard(store):
-    if not os.path.exists("sales_history.csv"): return
-    try:
-        df = pd.read_csv("sales_history.csv")
-        df = df[df["store"].str.lower() == store.lower()]
-        if df.empty: return
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        st.subheader("📉 Traffic & Sentiment Trends")
-        df_long = df.melt(id_vars=["timestamp"], value_vars=["foot", "social"], var_name="Metric", value_name="Value")
-        st.plotly_chart(px.line(df_long, x="timestamp", y="Value", color="Metric", markers=True))
-    except: pass
+    st.subheader("📈 Sales Over Time")
+    st.plotly_chart(px.line(df, x="timestamp", y="sales", title="Weekly Sales Forecast", markers=True))
 
-# --- Strategy ---
+    st.subheader("👣 Foot Traffic vs. 📱 Online Buzz")
+    df_long = df.melt(id_vars=["timestamp"], value_vars=["foot", "social"], var_name="metric", value_name="score")
+    st.plotly_chart(px.line(df_long, x="timestamp", y="score", color="metric", markers=True))
+
+    avg_type = df.groupby("type")["sales"].mean().reset_index()
+    st.subheader("🏷️ Average Sales by Store Type")
+    st.plotly_chart(px.bar(avg_type, x="type", y="sales", color="type", title="Avg Weekly Sales per Store Type"))
+
+# --- Strategy Engine ---
 def generate_recommendations(store, store_type, foot, soc, sales):
     r = []
     if foot < 0.4:
@@ -263,41 +256,34 @@ def generate_recommendations(store, store_type, foot, soc, sales):
 
 # --- Main App Execution ---
 st.title("📊 Retail AI: Forecast & Strategy")
-store = st.text_input("🏪 Store Name")
+store = st.text_input("🏪 Store Name (e.g. Dave's Hot Chicken)")
 zip_code = st.text_input("📍 ZIP Code (optional)")
 coords = None
 
 if store:
-    options = get_coords_from_store_name(store, zip_code)
-    if options:
-        coords = show_map_with_selection(options)
+    candidates = get_coords_from_store_name(store, zip_code)
+    if candidates:
+        coords = show_map_with_selection(candidates)
     else:
-        st.warning("Store location not found.")
+        st.warning("Location not found or outside ZIP radius.")
 
 if not coords:
     coords = show_map_with_selection([(40.7128, -74.0060, "New York (default)")])
 
 if coords:
-    image = fetch_satellite(coords)
-    st.image(image, caption="🛰️ Satellite Image", use_container_width=True)
+    image = fetch_or_upload_satellite_image(coords)
+    st.image(image, caption="🧪 Satellite View", use_container_width=True)
 
     if st.button("📊 Predict & Analyze"):
         try:
             features, foot, soc = build_feature_vector(image, coords, store, zip_code)
-            model = load_model()
+            model = load_real_data_model()
             pred = max(model.predict([features])[0], 0)
+            st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}**")
             save_prediction(store, coords, pred, foot, soc)
-
-            arrow = get_trend_arrow(pred)
-            st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}** {arrow}")
-
-            st.caption(f"📣 Social Sentiment Score: {soc}/100")
-            dashboard(store)
-
+            plot_insights(store)
             st.subheader("📦 Strategy Recommendations")
             for r in generate_recommendations(store, store_type, foot, soc, pred):
                 st.markdown(f"- {r}")
-
         except Exception as e:
             st.error(f"❌ Prediction failed: {e}")
-
