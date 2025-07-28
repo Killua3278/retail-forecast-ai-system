@@ -13,3 +13,4 @@ python-dotenv
 geopy
 streamlit-folium
 beautifulsoup4
+nltk==3.8.1
