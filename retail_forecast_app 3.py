@@ -1,4 +1,4 @@
-# ✅ Fully Integrated Retail AI App with Yelp, ZIP, Satellite, and Strategy Intelligence
+# ✅ Fully Integrated Retail AI App with Yelp, ZIP, Satellite, and Strategy Intelligence + Improved Visualizations + Advanced Recommendations
 
 # --- Imports and Setup ---
 import streamlit as st
@@ -98,14 +98,12 @@ def get_mock_placer_traffic(zip_code):
 def get_coords_from_store_name(name, zip_code):
     if not name:
         return []
-
     business = search_yelp_business(name, zip_code if zip_code else "USA")
     if business:
         coords = business.get("coordinates", {})
         lat, lon = coords.get("latitude"), coords.get("longitude")
         if lat and lon:
             return [(lat, lon, business.get("name") + ", " + business.get("location", {}).get("address1", "Yelp location"))]
-
     geolocator = Nominatim(user_agent="retail_ai_locator")
     def safe_geocode(query):
         for _ in range(3):
@@ -114,16 +112,13 @@ def get_coords_from_store_name(name, zip_code):
             except (GeocoderTimedOut, GeocoderUnavailable):
                 time.sleep(1)
         return None
-
     zip_location = safe_geocode(f"{zip_code}, USA") if zip_code else None
     full_query = f"{name}, {zip_code}, USA" if zip_code else f"{name}, USA"
     name_location = safe_geocode(full_query)
-
     if name_location and zip_location:
         dist = np.sqrt((name_location.latitude - zip_location.latitude)**2 + (name_location.longitude - zip_location.longitude)**2)
         if dist > 0.3:
             return []
-
     if name_location:
         return [(name_location.latitude, name_location.longitude, name_location.address)]
     return []
@@ -217,35 +212,46 @@ def plot_insights(store):
     if df.empty:
         return st.warning("No data found.")
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    st.plotly_chart(px.line(df, x="timestamp", y="sales", title="Sales Over Time"))
-    st.plotly_chart(px.area(df, x="timestamp", y=["foot", "social"], title="Foot Traffic & Social Buzz"))
+
+    st.subheader("📈 Sales Over Time")
+    st.plotly_chart(px.line(df, x="timestamp", y="sales", title="Weekly Sales Forecast", markers=True))
+
+    st.subheader("👣 Foot Traffic vs. 📱 Online Buzz")
+    df_long = df.melt(id_vars=["timestamp"], value_vars=["foot", "social"], var_name="metric", value_name="score")
+    st.plotly_chart(px.line(df_long, x="timestamp", y="score", color="metric", markers=True))
+
     avg_type = df.groupby("type")["sales"].mean().reset_index()
-    st.plotly_chart(px.bar(avg_type, x="type", y="sales", title="Avg Sales by Store Type"))
+    st.subheader("🏷️ Average Sales by Store Type")
+    st.plotly_chart(px.bar(avg_type, x="type", y="sales", color="type", title="Avg Weekly Sales per Store Type"))
 
 # --- Strategy Engine ---
 def generate_recommendations(store, store_type, foot, soc, sales):
     r = []
     if foot < 0.4:
-        r.append("🚶 Low traffic: partner with nearby stores or run sidewalk ads.")
+        r.append("🚶 Very low traffic: Partner with local gyms, schools, and offer sampling nearby.")
     elif foot < 0.6:
-        r.append("📣 Mid traffic: bundle promotions or promote peak hours.")
+        r.append("📣 Mid traffic: Run time-based promotions and push loyalty during lull periods.")
     else:
-        r.append("🏃 High traffic: loyalty points, upsells, or QR campaigns.")
+        r.append("🏃 High traffic: Incentivize check-ins, offer QR discounts, and speed up checkout.")
 
     if soc < 40:
-        r.append("📉 Weak online buzz: boost local SEO, ask for reviews.")
+        r.append("📉 Weak buzz: Ask for reviews, improve SEO, and offer incentives for shares.")
     elif soc < 70:
-        r.append("📱 Moderate buzz: run flash TikTok/Meta ads.")
+        r.append("📱 Moderate buzz: Use TikTok/Reels ads and start a UGC challenge.")
     else:
-        r.append("🔥 Viral: limited merch drops or exclusive loyalty rewards.")
+        r.append("🔥 Viral: Launch exclusive drops and capitalize with email capture + retargeting.")
 
     if store_type == "Fast Food" or "taco" in store.lower():
-        r.append("🌮 Fast food: optimize wait time & kiosk ordering.")
+        r.append("🌮 Fast food: Test limited menus, optimize for quick service, promote lunchtime deals.")
+    elif store_type == "Coffee Shop":
+        r.append("☕ Coffee Shop: Bundle with pastries, host open mic events, promote seasonal drinks.")
+    elif store_type == "Boutique":
+        r.append("🛍️ Boutique: Host influencer try-on events, offer style guides, cross-sell accessories.")
 
     if sales > 30000:
-        r.append("📊 High revenue: expand locations or upscale menus.")
+        r.append("📊 High revenue: Explore expansion, reinvest in experience upgrades.")
     elif sales < 10000:
-        r.append("⚖️ Low revenue: run free trials or price/value testing.")
+        r.append("⚖️ Low revenue: Consider price sensitivity testing and community referrals.")
     return r
 
 # --- Main App Execution ---
