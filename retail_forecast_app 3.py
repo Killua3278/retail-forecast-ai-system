@@ -285,7 +285,7 @@ if coords:
             model = load_real_data_model()
             pred = max(model.predict([features])[0], 0)
             st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}**")
-                    business_info = search_yelp_business(store, zip_code)
+            business_info = search_yelp_business(store, zip_code)
 if business_info:
             rating = business_info.get("rating")
             reviews = business_info.get("review_count")
