@@ -214,46 +214,51 @@ def plot_insights(store):
     df["timestamp"] = pd.to_datetime(df["timestamp"])
 
     st.subheader("📈 Sales Over Time")
-    st.plotly_chart(px.line(df, x="timestamp", y="sales", title="Weekly Sales Forecast", markers=True))
+    fig_sales = px.line(df, x="timestamp", y="sales", title="Weekly Sales Forecast", markers=True)
+    fig_sales.update_traces(line=dict(width=2))
+    st.plotly_chart(fig_sales)
 
     st.subheader("👣 Foot Traffic vs. 📱 Online Buzz")
     df_long = df.melt(id_vars=["timestamp"], value_vars=["foot", "social"], var_name="metric", value_name="score")
-    st.plotly_chart(px.line(df_long, x="timestamp", y="score", color="metric", markers=True))
+    fig_buzz = px.line(df_long, x="timestamp", y="score", color="metric", markers=True)
+    fig_buzz.update_traces(line=dict(width=2))
+    st.plotly_chart(fig_buzz)
 
     avg_type = df.groupby("type")["sales"].mean().reset_index()
     st.subheader("🏷️ Average Sales by Store Type")
-    st.plotly_chart(px.bar(avg_type, x="type", y="sales", color="type", title="Avg Weekly Sales per Store Type"))
+    fig_type = px.bar(avg_type, x="type", y="sales", color="type", title="Avg Weekly Sales per Store Type")
+    st.plotly_chart(fig_type)
 
 # --- Strategy Engine ---
 def generate_recommendations(store, store_type, foot, soc, sales):
     r = []
     if foot < 0.4:
-        r.append("🚶 Very low traffic: Partner with local gyms, schools, and offer sampling nearby.")
+        r.append("🚶 **Very Low Foot Traffic**: Footfall seems limited. Try partnering with local schools, gyms, and community centers to host pop-up booths or mini-events. Consider putting signage near high-traffic areas, and offer time-limited samples or discounts nearby to draw people in.")
     elif foot < 0.6:
-        r.append("📣 Mid traffic: Run time-based promotions and push loyalty during lull periods.")
+        r.append("📣 **Mid-Level Foot Traffic**: This is a sweet spot for targeted promotions. Launch limited-time offers tied to quiet hours, offer punch cards, or incentivize upselling. Consider collaborating with local delivery services to expand reach.")
     else:
-        r.append("🏃 High traffic: Incentivize check-ins, offer QR discounts, and speed up checkout.")
+        r.append("🏃 **High Foot Traffic**: Excellent location! Double down with fast checkout experiences like self-serve kiosks or express lines. Use QR codes for digital coupons and encourage check-ins for surprise rewards or loyalty boosts.")
 
     if soc < 40:
-        r.append("📉 Weak buzz: Ask for reviews, improve SEO, and offer incentives for shares.")
+        r.append("📉 **Weak Online Presence**: Few are talking about you online. Encourage satisfied customers to leave detailed reviews on Yelp and Google. Offer a small reward (e.g., 5% off next visit) in exchange. Optimize your website's SEO, and ensure you’re listed on local directories.")
     elif soc < 70:
-        r.append("📱 Moderate buzz: Use TikTok/Reels ads and start a UGC challenge.")
+        r.append("📱 **Moderate Online Buzz**: You're gaining visibility. Create short-form content (e.g., TikTok or Instagram Reels) that highlights your best-sellers. Encourage user-generated content by offering monthly giveaways to those who tag your business.")
     else:
-        r.append("🔥 Viral: Launch exclusive drops and capitalize with email capture + retargeting.")
+        r.append("🔥 **High Online Buzz**: You’re trending! Consider exclusive drops or early access events for followers. Capture emails via a sign-up incentive and retarget customers using Meta or Google Ads. Launch loyalty tiers to reward superfans.")
 
     if store_type == "Fast Food" or "taco" in store.lower():
-        r.append("🌮 Fast food: Test limited menus, optimize for quick service, promote lunchtime deals.")
+        r.append("🌮 **Fast Food Tips**: Promote combo deals during lunch rush. Invest in back-of-house speed optimizations, and test streamlined menus focused on top-sellers. Engage with food delivery platforms and promote loyalty with punch cards.")
     elif store_type == "Coffee Shop":
-        r.append("☕ Coffee Shop: Bundle with pastries, host open mic events, promote seasonal drinks.")
+        r.append("☕ **Coffee Shop Strategies**: Offer bundled morning deals (e.g., coffee + muffin). Host community events like book clubs, art displays, or music nights to drive loyalty. Use seasonal drinks and personalized drink names to create buzz.")
     elif store_type == "Boutique":
-        r.append("🛍️ Boutique: Host influencer try-on events, offer style guides, cross-sell accessories.")
+        r.append("🛍️ **Boutique Boosters**: Host monthly themed try-on events and partner with local influencers for giveaways. Consider offering a personal styling service, style quizzes, or bundling accessories with outfits for upselling.")
 
     if sales > 30000:
-        r.append("📊 High revenue: Explore expansion, reinvest in experience upgrades.")
+        r.append("📊 **High Sales**: Strong revenue indicates readiness for scale. Look into franchising, adding a second location, or building an online storefront. Allocate budget for brand enhancement—think packaging, ambiance, and staff uniforms.")
     elif sales < 10000:
-        r.append("⚖️ Low revenue: Consider price sensitivity testing and community referrals.")
-    return r
+        r.append("⚖️ **Low Revenue**: Consider a price sensitivity test—A/B testing menu prices or bundles to find optimal value points. Invest in neighborhood referrals and loyalty discounts to increase word-of-mouth.")
 
+    return r
 # --- Main App Execution ---
 st.title("📊 Retail AI: Forecast & Strategy")
 store = st.text_input("🏪 Store Name (e.g. Dave's Hot Chicken)")
