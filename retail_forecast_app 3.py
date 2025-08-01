@@ -88,6 +88,23 @@ def get_yelp_sentiment_score(business):
     review_count = business.get("review_count", 0)
     return round(min(100, max(0, (rating - 3) * 25 + review_count * 0.1)), 1)
 
+def get_yelp_insights(store, location):
+    business = search_yelp_business(store, location)
+    if not business:
+        return None
+
+    yelp_data = {
+        "name": business.get("name", "N/A"),
+        "rating": business.get("rating", "N/A"),
+        "review_count": business.get("review_count", "N/A"),
+        "categories": ", ".join([cat["title"] for cat in business.get("categories", [])]),
+        "location": business.get("location", {}).get("address1", "N/A"),
+        "phone": business.get("phone", "N/A"),
+        "yelp_url": business.get("url", "N/A")
+    }
+    
+    return yelp_data
+
 def get_mock_placer_traffic(zip_code):
     if not zip_code:
         return 0.45
@@ -297,6 +314,18 @@ if coords:
     image = fetch_or_upload_satellite_image(coords)
     st.image(image, caption="🧪 Satellite View", use_container_width=True)
 
+    # Get Yelp Insights
+    yelp_insights = get_yelp_insights(store, zip_code)
+    if yelp_insights:
+        st.subheader("📖 Yelp Insights")
+        st.write(f"**Store Name**: {yelp_insights['name']}")
+        st.write(f"**Rating**: {yelp_insights['rating']}⭐")
+        st.write(f"**Reviews**: {yelp_insights['review_count']} reviews")
+        st.write(f"**Categories**: {yelp_insights['categories']}")
+        st.write(f"**Location**: {yelp_insights['location']}")
+        st.write(f"**Phone**: {yelp_insights['phone']}")
+        st.write(f"[Yelp Link]({yelp_insights['yelp_url']})")
+    
     if st.button("📊 Predict & Analyze"):
         try:
             features, foot, soc = build_feature_vector(image, coords, store, zip_code)
