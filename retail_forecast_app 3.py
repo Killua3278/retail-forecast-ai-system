@@ -134,7 +134,7 @@ def get_coords_from_store_name(name, zip_code):
     name_location = safe_geocode(full_query)
     if name_location and zip_location:
         dist = np.sqrt((name_location.latitude - zip_location.latitude)**2 + (name_location.longitude - zip_location.longitude)**2)
-        if dist > 0.3:
+        if dist > 0.3:  # Filters out businesses outside the ZIP code range
             return []
     if name_location:
         return [(name_location.latitude, name_location.longitude, name_location.address)]
@@ -214,7 +214,7 @@ def load_real_data_model():
 
 # --- Save & Visualize ---
 def save_prediction(store, coords, pred, foot, soc):
-    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
+    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]], 
                       columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
     if os.path.exists("sales_history.csv"):
         try:
@@ -262,35 +262,16 @@ def plot_insights(store):
 # --- Strategy Engine ---
 def generate_recommendations(store, store_type, foot, soc, sales):
     r = []
-    if foot < 0.4:
-        r.append("🚶 **Very Low Foot Traffic**: Footfall seems limited. Try partnering with local schools, gyms, and community centers to host pop-up booths or mini-events. Consider putting signage near high-traffic areas, and offer time-limited samples or discounts nearby to draw people in.")
-    elif foot < 0.6:
-        r.append("📣 **Mid-Level Foot Traffic**: This is a sweet spot for targeted promotions. Launch limited-time offers tied to quiet hours, offer punch cards, or incentivize upselling. Consider collaborating with local delivery services to expand reach.")
-    else:
-        r.append("🏃 **High Foot Traffic**: Excellent location! Double down with fast checkout experiences like self-serve kiosks or express lines. Use QR codes for digital coupons and encourage check-ins for surprise rewards or loyalty boosts.")
-
-    if soc < 40:
-        r.append("📉 **Weak Online Presence**: Few are talking about you online. Encourage satisfied customers to leave detailed reviews on Yelp and Google. Offer a small reward (e.g., 5% off next visit) in exchange. Optimize your website's SEO, and ensure you’re listed on local directories.")
-    elif soc < 70:
-        r.append("📱 **Moderate Online Buzz**: You're gaining visibility. Create short-form content (e.g., TikTok or Instagram Reels) that highlights your best-sellers. Encourage user-generated content by offering monthly giveaways to those who tag your business.")
-    else:
-        r.append("🔥 **High Online Buzz**: You’re trending! Consider exclusive drops or early access events for followers. Capture emails via a sign-up incentive and retarget customers using Meta or Google Ads. Launch loyalty tiers to reward superfans.")
-
-    # Store-specific recommendations
-    if store_type == "Fast Food" or "taco" in store.lower():
-        r.append("🌮 **Fast Food Tips**: Promote combo deals during lunch rush. Invest in back-of-house speed optimizations, and test streamlined menus focused on top-sellers. Engage with food delivery platforms and promote loyalty with punch cards.")
-    elif store_type == "Coffee Shop":
-        r.append("☕ **Coffee Shop Strategies**: Offer bundled morning deals (e.g., coffee + muffin). Host community events like book clubs, art displays, or music nights to drive loyalty. Use seasonal drinks and personalized drink names to create buzz.")
-    elif store_type == "Boutique":
-        r.append("🛍️ **Boutique Boosters**: Host monthly themed try-on events and partner with local influencers for giveaways. Consider offering a personal styling service, style quizzes, or bundling accessories with outfits for upselling.")
-
-    if sales > 30000:
-        r.append("📊 **High Sales**: Strong revenue indicates readiness for scale. Look into franchising, adding a second location, or building an online storefront. Allocate budget for brand enhancement—think packaging, ambiance, and staff uniforms.")
-    elif sales < 10000:
-        r.append("⚖️ **Low Revenue**: Consider a price sensitivity test—A/B testing menu prices or bundles to find optimal value points. Invest in neighborhood referrals and loyalty discounts to increase word-of-mouth.")
-
-    while len(r) < 6:  # Ensure at least 6 recommendations
-        r.append("💡 **General Advice**: Keep improving your in-store experience! Consider optimizing your hours, offering seasonal promotions, and improving staff training.")
+    recommendations = [
+        "🚶 **Very Low Foot Traffic**: Footfall seems limited. Try partnering with local schools, gyms, and community centers to host pop-up booths or mini-events.",
+        "📣 **Mid-Level Foot Traffic**: This is a sweet spot for targeted promotions. Launch limited-time offers tied to quiet hours, offer punch cards, or incentivize upselling.",
+        "🏃 **High Foot Traffic**: Excellent location! Double down with fast checkout experiences like self-serve kiosks or express lines.",
+        "📉 **Weak Online Presence**: Few are talking about you online. Encourage satisfied customers to leave detailed reviews on Yelp and Google.",
+        "📱 **Moderate Online Buzz**: You're gaining visibility. Create short-form content (e.g., TikTok or Instagram Reels).",
+        "🔥 **High Online Buzz**: You’re trending! Consider exclusive drops or early access events for followers."
+    ]
+    for rec in recommendations:
+        r.append(rec)
     
     return r
 
