@@ -112,10 +112,11 @@ def get_mock_placer_traffic(zip_code):
     return round(0.3 + 0.05 * hashval, 2)
 
 # --- Geolocation ---
-def get_coords_from_store_name(name, zip_code):
-    if not name:
+def get_coords_from_store_name(name, zip_code, town, state):
+    if not name or not zip_code or not town or not state:
         return []
-    business = search_yelp_business(name, zip_code if zip_code else "USA")
+    location_query = f"{name}, {town}, {state}, {zip_code}, USA"
+    business = search_yelp_business(name, location_query)
     if business:
         coords = business.get("coordinates", {})
         lat, lon = coords.get("latitude"), coords.get("longitude")
@@ -262,28 +263,40 @@ def plot_insights(store):
 # --- Strategy Engine ---
 def generate_recommendations(store, store_type, foot, soc, sales):
     r = []
-    recommendations = [
-        "🚶 **Very Low Foot Traffic**: Footfall seems limited. Try collaborating with local schools or offering exclusive pop-up events at nearby hotspots.",
-        "📣 **Mid-Level Foot Traffic**: Offer discounts during quiet hours to draw in customers, or try bundling items for higher customer spend.",
-        "🏃 **High Foot Traffic**: Focus on fast and convenient service—think self-checkout kiosks and express lanes. Consider loyalty programs.",
-        "📉 **Weak Online Presence**: Optimize your Google and Yelp listings, and encourage reviews. Offer incentives for detailed reviews from loyal customers.",
-        "📱 **Moderate Online Buzz**: Run social media campaigns like Instagram Reels or TikTok to showcase popular products. Engage with your followers.",
-        "🔥 **High Online Buzz**: Reward loyal customers with special offers. Consider collaborations with influencers to further boost your reach."
-    ]
-    
-    for rec in recommendations:
-        r.append(rec)
+    if foot < 0.4:
+        r.append("🚶 **Very Low Foot Traffic**: Footfall seems limited. Try collaborating with local schools or offering exclusive pop-up events at nearby hotspots.")
+    if foot >= 0.4 and foot < 0.6:
+        r.append("📣 **Mid-Level Foot Traffic**: Offer discounts during quiet hours to draw in customers, or try bundling items for higher customer spend.")
+    if foot >= 0.6:
+        r.append("🏃 **High Foot Traffic**: Focus on fast and convenient service—think self-checkout kiosks and express lanes. Consider loyalty programs.")
+        
+    if soc < 40:
+        r.append("📉 **Weak Online Presence**: Optimize your Google and Yelp listings, and encourage reviews. Offer incentives for detailed reviews from loyal customers.")
+    if soc >= 40 and soc < 70:
+        r.append("📱 **Moderate Online Buzz**: Run social media campaigns like Instagram Reels or TikTok to showcase popular products. Engage with your followers.")
+    if soc >= 70:
+        r.append("🔥 **High Online Buzz**: Reward loyal customers with special offers. Consider collaborations with influencers to further boost your reach.")
 
+    if sales > 30000:
+        r.append("📊 **High Sales**: Strong revenue indicates readiness for scale. Look into franchising, adding a second location, or building an online storefront.")
+    elif sales < 10000:
+        r.append("⚖️ **Low Revenue**: Consider running an A/B test for pricing or bundling. Invest in neighborhood referrals and loyalty discounts.")
+
+    while len(r) < 6:  # Ensure at least 6 recommendations
+        r.append("💡 **General Advice**: Keep improving your in-store experience! Consider optimizing your hours, offering seasonal promotions, and improving staff training.")
+    
     return r
 
 # --- Main App Execution ---
 st.title("📊 Retail AI: Forecast & Strategy")
 store = st.text_input("🏪 Store Name (e.g. Dave's Hot Chicken)")
-zip_code = st.text_input("📍 ZIP Code (optional)")
+zip_code = st.text_input("📍 ZIP Code (required)")
+town = st.text_input("🏙️ Town")
+state = st.text_input("🏞️ State")
 coords = None
 
-if store:
-    candidates = get_coords_from_store_name(store, zip_code)
+if store and zip_code and town and state:
+    candidates = get_coords_from_store_name(store, zip_code, town, state)
     if candidates:
         coords = show_map_with_selection(candidates)
     else:
