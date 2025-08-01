@@ -164,6 +164,12 @@ def build_feature_vector(img, coords, store, zip_code):
     business = search_yelp_business(store, zip_code)
     foot = get_mock_placer_traffic(zip_code)
     soc = get_yelp_sentiment_score(business)
+    
+    # Store features in session state for consistency
+    st.session_state['features'] = features
+    st.session_state['foot'] = foot
+    st.session_state['soc'] = soc
+
     return features, foot, soc
 
 # --- Model & Prediction ---
@@ -202,28 +208,35 @@ def save_prediction(store, coords, pred, foot, soc):
     df.to_csv("sales_history.csv", index=False)
 
 def plot_insights(store):
-    if not os.path.exists("sales_history.csv"):
+    if 'sales_history.csv' not in os.listdir():
         return st.info("No data yet.")
     try:
         df = pd.read_csv("sales_history.csv", on_bad_lines='skip')
     except:
         return st.warning("Could not read history file.")
+    
+    # Filter data for the current store, ensuring correct formatting for Plotly
     df = df[df["store"].str.lower() == store.lower()]
     if df.empty:
         return st.warning("No data found.")
+    
+    # Ensure the timestamp is parsed correctly
     df["timestamp"] = pd.to_datetime(df["timestamp"])
 
+    # Display the sales graph
     st.subheader("📈 Sales Over Time")
     fig_sales = px.line(df, x="timestamp", y="sales", title="Weekly Sales Forecast", markers=True)
     fig_sales.update_traces(line=dict(width=2))
     st.plotly_chart(fig_sales)
 
+    # Display Foot Traffic vs Online Buzz graph
     st.subheader("👣 Foot Traffic vs. 📱 Online Buzz")
     df_long = df.melt(id_vars=["timestamp"], value_vars=["foot", "social"], var_name="metric", value_name="score")
     fig_buzz = px.line(df_long, x="timestamp", y="score", color="metric", markers=True)
     fig_buzz.update_traces(line=dict(width=2))
     st.plotly_chart(fig_buzz)
 
+    # Display average sales by store type
     avg_type = df.groupby("type")["sales"].mean().reset_index()
     st.subheader("🏷️ Average Sales by Store Type")
     fig_type = px.bar(avg_type, x="type", y="sales", color="type", title="Avg Weekly Sales per Store Type")
@@ -246,6 +259,7 @@ def generate_recommendations(store, store_type, foot, soc, sales):
     else:
         r.append("🔥 **High Online Buzz**: You’re trending! Consider exclusive drops or early access events for followers. Capture emails via a sign-up incentive and retarget customers using Meta or Google Ads. Launch loyalty tiers to reward superfans.")
 
+    # Store-specific recommendations
     if store_type == "Fast Food" or "taco" in store.lower():
         r.append("🌮 **Fast Food Tips**: Promote combo deals during lunch rush. Invest in back-of-house speed optimizations, and test streamlined menus focused on top-sellers. Engage with food delivery platforms and promote loyalty with punch cards.")
     elif store_type == "Coffee Shop":
@@ -258,7 +272,11 @@ def generate_recommendations(store, store_type, foot, soc, sales):
     elif sales < 10000:
         r.append("⚖️ **Low Revenue**: Consider a price sensitivity test—A/B testing menu prices or bundles to find optimal value points. Invest in neighborhood referrals and loyalty discounts to increase word-of-mouth.")
 
+    while len(r) < 6:  # Ensure at least 6 recommendations
+        r.append("💡 **General Advice**: Keep improving your in-store experience! Consider optimizing your hours, offering seasonal promotions, and improving staff training.")
+    
     return r
+
 # --- Main App Execution ---
 st.title("📊 Retail AI: Forecast & Strategy")
 store = st.text_input("🏪 Store Name (e.g. Dave's Hot Chicken)")
@@ -292,3 +310,4 @@ if coords:
                 st.markdown(f"- {r}")
         except Exception as e:
             st.error(f"❌ Prediction failed: {e}")
+
