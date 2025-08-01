@@ -310,4 +310,3 @@ if coords:
                 st.markdown(f"- {r}")
         except Exception as e:
             st.error(f"❌ Prediction failed: {e}")
-
