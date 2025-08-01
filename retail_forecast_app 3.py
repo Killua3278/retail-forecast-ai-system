@@ -263,16 +263,17 @@ def plot_insights(store):
 def generate_recommendations(store, store_type, foot, soc, sales):
     r = []
     recommendations = [
-        "🚶 **Very Low Foot Traffic**: Footfall seems limited. Try partnering with local schools, gyms, and community centers to host pop-up booths or mini-events.",
-        "📣 **Mid-Level Foot Traffic**: This is a sweet spot for targeted promotions. Launch limited-time offers tied to quiet hours, offer punch cards, or incentivize upselling.",
-        "🏃 **High Foot Traffic**: Excellent location! Double down with fast checkout experiences like self-serve kiosks or express lines.",
-        "📉 **Weak Online Presence**: Few are talking about you online. Encourage satisfied customers to leave detailed reviews on Yelp and Google.",
-        "📱 **Moderate Online Buzz**: You're gaining visibility. Create short-form content (e.g., TikTok or Instagram Reels).",
-        "🔥 **High Online Buzz**: You’re trending! Consider exclusive drops or early access events for followers."
+        "🚶 **Very Low Foot Traffic**: Footfall seems limited. Try collaborating with local schools or offering exclusive pop-up events at nearby hotspots.",
+        "📣 **Mid-Level Foot Traffic**: Offer discounts during quiet hours to draw in customers, or try bundling items for higher customer spend.",
+        "🏃 **High Foot Traffic**: Focus on fast and convenient service—think self-checkout kiosks and express lanes. Consider loyalty programs.",
+        "📉 **Weak Online Presence**: Optimize your Google and Yelp listings, and encourage reviews. Offer incentives for detailed reviews from loyal customers.",
+        "📱 **Moderate Online Buzz**: Run social media campaigns like Instagram Reels or TikTok to showcase popular products. Engage with your followers.",
+        "🔥 **High Online Buzz**: Reward loyal customers with special offers. Consider collaborations with influencers to further boost your reach."
     ]
+    
     for rec in recommendations:
         r.append(rec)
-    
+
     return r
 
 # --- Main App Execution ---
