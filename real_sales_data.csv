@@ -1,26 +1,73 @@
 import pandas as pd
 import numpy as np
+import requests
+import streamlit as st
 
-# Parameters
-n_samples = 250
-n_features = 512
+# Directly set your FRED API key here
+FRED_API_KEY = "2b3d6cd4f1beaff485e00e9ced088b10"
 
-# Satellite image features (f0 to f511)
-data = {f"f{i}": np.random.normal(loc=0.5, scale=0.15, size=n_samples) for i in range(n_features)}
+# Fetch retail sales data from FRED using your API key
+def get_fred_retail_sales_data():
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        'series_id': 'RSTSA',  # Retail Sales: Total Sales ID from FRED
+        'api_key': FRED_API_KEY,  # Your FRED API Key
+        'file_type': 'json',
+        'observation_start': '2010-01-01',  # Start date for data
+        'observation_end': '2023-01-01'  # End date for data
+    }
+    response = requests.get(url, params=params)
+    data = response.json()
+    
+    # Extract sales data and convert it into a DataFrame
+    sales_data = [(item['date'], item['value']) for item in data['observations'] if item['value'] != '.']
+    sales_df = pd.DataFrame(sales_data, columns=['date', 'sales'])
+    
+    return sales_df
 
-# Coordinates and synthetic targets
-data["lat"] = np.random.uniform(34.0, 42.0, n_samples)
-data["lon"] = np.random.uniform(-118.0, -73.0, n_samples)
-data["sales"] = np.random.randint(5000, 40000, n_samples)
+# Generate synthetic satellite features (f0 to f511)
+def generate_synthetic_features(n_samples):
+    n_features = 512  # Number of satellite image features
+    satellite_features = {f"f{i}": np.random.normal(loc=0.5, scale=0.15, size=n_samples) for i in range(n_features)}
+    return satellite_features
 
-# Validate column structure
-required_columns = [f"f{i}" for i in range(n_features)] + ["lat", "lon", "sales"]
-real_sales_data = pd.DataFrame(data)
+# Combine sales data with synthetic features
+def create_real_sales_data():
+    # Step 1: Fetch retail sales data from FRED
+    retail_sales_df = get_fred_retail_sales_data()
+    
+    # Step 2: Generate synthetic satellite image features (f0 to f511)
+    n_samples = len(retail_sales_df)  # This will be the same number of rows as the sales data
+    satellite_features = generate_synthetic_features(n_samples)
+    
+    # Step 3: Generate random latitude and longitude values (or use real coordinates if available)
+    latitudes = np.random.uniform(34.0, 42.0, n_samples)
+    longitudes = np.random.uniform(-118.0, -73.0, n_samples)
 
-missing_cols = set(required_columns) - set(real_sales_data.columns)
-if missing_cols:
-    raise ValueError(f"Missing columns in generated data: {missing_cols}")
+    # Step 4: Combine everything into a single DataFrame
+    data = {
+        'lat': latitudes,
+        'lon': longitudes,
+        'sales': retail_sales_df['sales'].values  # Use real sales data from FRED
+    }
 
-# Save DataFrame
-real_sales_data.to_csv("real_sales_data.csv", index=False)
-print("✅ real_sales_data.csv created successfully with all required columns")
+    # Combine satellite features with sales and coordinates data
+    data.update(satellite_features)
+
+    # Convert to DataFrame
+    real_sales_data = pd.DataFrame(data)
+
+    # Validate column structure
+    required_columns = [f"f{i}" for i in range(512)] + ["lat", "lon", "sales"]
+    missing_cols = set(required_columns) - set(real_sales_data.columns)
+
+    if missing_cols:
+        raise ValueError(f"Missing columns in real data: {missing_cols}")
+
+    # Save the updated DataFrame to a CSV file
+    real_sales_data.to_csv("real_sales_data.csv", index=False)
+    print("✅ real_sales_data.csv created successfully with real sales data and satellite features.")
+    return real_sales_data
+
+# Step 5: Generate and save the real sales data
+real_sales_data = create_real_sales_data()
