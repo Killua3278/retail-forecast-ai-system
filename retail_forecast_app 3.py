@@ -22,7 +22,6 @@ from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.dummy import DummyRegressor
 import time
-from bs4 import BeautifulSoup
 from math import radians, sin, cos, asin, sqrt
 import random
 from datetime import datetime, timedelta
@@ -32,7 +31,6 @@ st.set_page_config(page_title="Retail AI Platform", layout="wide")
 
 # --- Secrets helpers ---
 def _try_secrets(path_list):
-    """Try multiple locations inside st.secrets (root, sections)"""
     cur = st.secrets if hasattr(st, "secrets") else {}
     for key in path_list:
         try:
@@ -49,7 +47,6 @@ def get_secret(name):
       3) st.secrets['general'][name]
       4) os.environ[name]
     """
-    val = None
     val = _try_secrets([name]) or _try_secrets(["api", name]) or _try_secrets(["general", name])
     if not val:
         val = os.getenv(name)
@@ -62,6 +59,7 @@ def _mask(s):
 YELP_API_KEY = get_secret("YELP_API_KEY")
 GOOGLE_MAPS_API_KEY = get_secret("GOOGLE_MAPS_API_KEY")
 FRED_API_KEY = get_secret("FRED_API_KEY")
+YELP_HEADERS = {"Authorization": f"Bearer {YELP_API_KEY}"} if YELP_API_KEY else {}
 
 # --- Sidebar ---
 st.sidebar.title("🔧 Settings")
@@ -80,9 +78,6 @@ if st.sidebar.button("🥩 Clear Sales History"):
     if os.path.exists("sales_history.csv"):
         os.remove("sales_history.csv")
         st.sidebar.success("History cleared.")
-
-# Build headers from active key
-YELP_HEADERS = {"Authorization": f"Bearer {YELP_API_KEY}"} if YELP_API_KEY else {}
 
 # --- Theme Styling ---
 def set_theme():
@@ -130,13 +125,43 @@ def haversine_m(lat1, lon1, lat2, lon2):
     a = sin(dφ/2)**2 + cos(φ1)*cos(φ2)*sin(dλ/2)**2
     return 2*R*asin(sqrt(a))
 
-# --- Yelp & Traffic ---
-def search_yelp_business(name, location):
-    """Keep location simple: ZIP or 'town, ST'. Gracefully handle missing key/rate limits."""
+# --- Yelp API helpers (details + reviews) ---
+def _yelp_get(path, params=None):
     if not YELP_API_KEY:
         return None
+    try:
+        r = requests.get(f"https://api.yelp.com/v3{path}", headers=YELP_HEADERS, params=params or {}, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+        return None
+    except requests.RequestException:
+        return None
+
+def get_yelp_business_details(business_id: str):
+    if not business_id:
+        return None
+    return _yelp_get(f"/businesses/{business_id}")
+
+def get_yelp_top_reviews(business_id: str, locale="en_US"):
+    js = _yelp_get(f"/businesses/{business_id}/reviews", params={"locale": locale})
+    return (js or {}).get("reviews", [])[:3]
+
+def search_yelp_business(name, location=None, coords=None):
+    """
+    Prefer coordinate search (more accurate, fewer 400s).
+    Fallback to location string (ZIP or 'town, ST') if coords not available.
+    """
+    if not YELP_API_KEY or not name:
+        return None
     url = "https://api.yelp.com/v3/businesses/search"
-    params = {"term": name, "location": location, "limit": 1}
+    params = {"term": name, "limit": 1, "sort_by": "best_match"}
+    if coords:
+        params["latitude"], params["longitude"] = coords[0], coords[1]
+        params["radius"] = 25000  # 25km max
+    else:
+        if not location:
+            return None
+        params["location"] = location
     try:
         r = requests.get(url, headers=YELP_HEADERS, params=params, timeout=10)
         if r.status_code == 200:
@@ -144,41 +169,57 @@ def search_yelp_business(name, location):
             if js.get("businesses"):
                 return js["businesses"][0]
         elif r.status_code in (401, 403):
-            st.warning("Yelp API unauthorized/rate-limited. Verify key and quotas.")
+            st.warning("Yelp API unauthorized or rate-limited. Check key/quota.")
+        elif r.status_code == 400:
+            st.info("Yelp API returned 400 (validation). Will try fallback path.")
         else:
             st.info(f"Yelp API returned {r.status_code}.")
     except requests.RequestException:
         pass
     return None
 
-def get_yelp_sentiment_score(business):
-    if not business:
+def get_yelp_sentiment_score(business_or_details):
+    if not business_or_details:
         return 50.0
-    rating = business.get("rating", 3.0) or 3.0
-    review_count = business.get("review_count", 0) or 0
-    # rating centered at 3.0; mild lift from review volume
+    rating = business_or_details.get("rating", 3.0) or 3.0
+    review_count = business_or_details.get("review_count", 0) or 0
     return round(min(100, max(0, (rating - 3) * 25 + review_count * 0.1)), 1)
 
-def get_yelp_insights(store, location):
-    business = search_yelp_business(store, location)
-    if not business:
+def get_yelp_insights(store, location, coords=None):
+    # Find the best match first (coords-first, fallback to location)
+    biz = search_yelp_business(store, location=location, coords=coords) or \
+          search_yelp_business(store, location=location, coords=None)
+    if not biz:
         return None
-    yelp_data = {
-        "name": business.get("name", "N/A"),
-        "rating": business.get("rating", "N/A"),
-        "review_count": business.get("review_count", "N/A"),
-        "categories": ", ".join([cat["title"] for cat in business.get("categories", [])]),
+
+    # Merge basic hit with full details
+    details = get_yelp_business_details(biz.get("id")) or {}
+    location_obj = details.get("location") or biz.get("location") or {}
+    categories = details.get("categories") or biz.get("categories") or []
+    coords_obj = details.get("coordinates") or biz.get("coordinates") or {}
+
+    data = {
+        "id": biz.get("id"),
+        "name": details.get("name") or biz.get("name"),
+        "rating": details.get("rating", biz.get("rating")),
+        "review_count": details.get("review_count", biz.get("review_count")),
+        "price": details.get("price"),  # "$", "$$", "$$$", "$$$$"
+        "is_closed": details.get("is_closed", biz.get("is_closed")),
+        "transactions": details.get("transactions", []),
+        "photos": details.get("photos", []),
+        "categories": ", ".join([c.get("title","") for c in categories if c.get("title")]) or "N/A",
         "location": ", ".join(filter(None, [
-            business.get("location", {}).get("address1", ""),
-            business.get("location", {}).get("city", ""),
-            business.get("location", {}).get("state", ""),
-            business.get("location", {}).get("zip_code", "")
+            location_obj.get("address1",""), location_obj.get("city",""),
+            location_obj.get("state",""), location_obj.get("zip_code","")
         ])) or "N/A",
-        "phone": business.get("phone", "N/A"),
-        "yelp_url": business.get("url", "N/A"),
-        "coordinates": business.get("coordinates", {})
+        "display_address": " • ".join(location_obj.get("display_address", [])) or None,
+        "phone": details.get("display_phone") or details.get("phone") or biz.get("display_phone") or biz.get("phone"),
+        "yelp_url": details.get("url", biz.get("url")),
+        "coordinates": coords_obj,
+        "hours": details.get("hours", []),
     }
-    return yelp_data
+    data["top_reviews"] = get_yelp_top_reviews(biz.get("id")) or []
+    return data
 
 def get_mock_placer_traffic(zip_code):
     if not zip_code:
@@ -204,8 +245,7 @@ def fred_series(series_id, api_key=FRED_API_KEY, months=24):
         r = requests.get(FRED_BASE, params=params, timeout=12)
         r.raise_for_status()
         data = r.json().get("observations", [])
-        dates = []
-        vals = []
+        dates, vals = [], []
         for o in data:
             v = o.get("value")
             if v is None or v in ("", "."):
@@ -225,16 +265,11 @@ def fred_series(series_id, api_key=FRED_API_KEY, months=24):
 def fred_features():
     """
     Pull macro features:
-      - RRSFS: Real Retail & Food Services Sales (index; higher is good)
+      - RRSFS: Real Retail & Food Services Sales (higher is good)
       - UMCSENT: Consumer Sentiment (higher is good)
       - UNRATE: Unemployment Rate (lower is good)
-    Return dict with latest, YoY pct change, and z-scores for each.
     """
-    series_map = {
-        "RRSFS": "RRSFS",   # Real Retail & Food Services Sales
-        "UMCSENT": "UMCSENT",  # Consumer Sentiment
-        "UNRATE": "UNRATE"  # Unemployment rate
-    }
+    series_map = {"RRSFS": "RRSFS", "UMCSENT": "UMCSENT", "UNRATE": "UNRATE"}
     out = {}
     for key, sid in series_map.items():
         s = fred_series(sid)
@@ -242,14 +277,12 @@ def fred_features():
             out[key] = {"latest": None, "yoy": None, "z": 0.0}
             continue
         latest = s.iloc[-1]
-        # YoY change: compare to value ~12 months earlier if available
         prev_idx = s.index.searchsorted(s.index[-1] - pd.DateOffset(years=1))
         yoy = None
         if 0 <= prev_idx < len(s):
             prev = s.iloc[prev_idx]
             if prev != 0:
                 yoy = (latest - prev) / abs(prev)
-        # z-score using rolling window for robustness
         roll = s.rolling(12, min_periods=6)
         mean = roll.mean().iloc[-1]
         std = roll.std(ddof=0).iloc[-1] or 1.0
@@ -279,7 +312,7 @@ def get_coords_from_store_name(name, zip_code, town, state, radius_m=25000):
 
     # 2) Try Yelp near ZIP (preferred) else "town, ST"
     yelp_loc_str = zip_code if zip_anchor else f"{town}, {st_norm}"
-    ybiz = search_yelp_business(name, yelp_loc_str)
+    ybiz = search_yelp_business(name, location=yelp_loc_str, coords=None)
     if ybiz:
         c = ybiz.get("coordinates") or {}
         lat, lon = c.get("latitude"), c.get("longitude")
@@ -305,12 +338,26 @@ def get_coords_from_store_name(name, zip_code, town, state, radius_m=25000):
         return [(town_loc.latitude, town_loc.longitude, town_loc.address)]
     return []
 
-def show_map_with_selection(options):
+def show_map_with_selection(options, *, show_radius_m=400):
     st.subheader("📍 Select Your Store Location")
-    m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14)
+    # Center map and add a CLEAR red pin + optional radius circle
+    m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14, control_scale=True)
     for lat, lon, label in options:
-        folium.Marker(location=[lat, lon], tooltip=label).add_to(m)
-    st_folium(m, height=350, width=700)
+        folium.Marker(
+            location=[lat, lon],
+            tooltip=label,
+            popup=label,
+            icon=folium.Icon(color="red", icon="info-sign")
+        ).add_to(m)
+        if show_radius_m:
+            folium.Circle(
+                radius=show_radius_m,
+                location=[lat, lon],
+                color="#FF4136",
+                fill=True,
+                fill_opacity=0.08
+            ).add_to(m)
+    st_folium(m, height=380, width=None)
     return options[0][:2]
 
 # --- Satellite & Feature Engineering ---
@@ -346,12 +393,12 @@ def build_feature_vector(img, coords, store, zip_code, town=None, state=None, fr
     sat = extract_satellite_features(img)
     latlon = np.array([coords[0], coords[1]], dtype=float)
 
-    # Yelp (localized by ZIP or "town, ST")
+    # Yelp (coords-first inside get_yelp_insights)
     yelp_loc = zip_code or (f"{town}, {norm_state(state)}" if (town and state) else "")
-    ybiz = search_yelp_business(store, yelp_loc)
-    rating = (ybiz or {}).get("rating", 3.0) or 3.0
-    reviews = (ybiz or {}).get("review_count", 0) or 0
-    yelp_sent = get_yelp_sentiment_score(ybiz)
+    ydetails = get_yelp_insights(store, yelp_loc, coords=coords)
+    rating = (ydetails or {}).get("rating", 3.0) or 3.0
+    reviews = (ydetails or {}).get("review_count", 0) or 0
+    yelp_sent = get_yelp_sentiment_score(ydetails)
 
     # Foot traffic proxy
     foot = get_mock_placer_traffic(zip_code)
@@ -362,21 +409,14 @@ def build_feature_vector(img, coords, store, zip_code, town=None, state=None, fr
     umcsent_z = fred.get("UMCSENT", {}).get("z", 0.0) or 0.0
     unrate_z = fred.get("UNRATE", {}).get("z", 0.0) or 0.0
 
-    aux = np.array([
-        rating, reviews, yelp_sent, foot,
-        rrsfs_z, umcsent_z, unrate_z
-    ], dtype=float)
-
-    # Full feature vector for model (keeps old shape first 514; we append aux safely)
-    # If a pre-trained model expects 514 dims, we can still pass only 514; keep AUX for heuristic.
-    model_feats = np.concatenate([sat, latlon], axis=0)   # len 514
-    aux_feats = aux                                      # len 7
+    aux = np.array([rating, reviews, yelp_sent, foot, rrsfs_z, umcsent_z, unrate_z], dtype=float)
+    model_feats = np.concatenate([sat, latlon], axis=0)   # 514 dims
 
     st.session_state['aux_feats'] = {
         "rating": rating, "reviews": reviews, "yelp_sent": yelp_sent, "foot": foot,
         "rrsfs_z": rrsfs_z, "umcsent_z": umcsent_z, "unrate_z": unrate_z
     }
-    return model_feats, aux_feats
+    return model_feats, aux
 
 # --- Model & Prediction ---
 def load_fallback_model():
@@ -403,8 +443,7 @@ def load_real_data_model():
 
 def hybrid_prediction(model, model_feats, aux_feats):
     """
-    Try model.predict with 514-dim features. If it fails or looks off, blend with a heuristic that
-    uses Yelp + Foot + FRED macros.
+    Try model.predict with 514-dim features; blend with heuristic using Yelp + Foot + FRED.
     """
     pred = None
     try:
@@ -412,37 +451,28 @@ def hybrid_prediction(model, model_feats, aux_feats):
     except Exception:
         pred = None
 
-    # Heuristic baseline (15k) scaled by signals
     rating, reviews, yelp_sent, foot, rrsfs_z, umcsent_z, unrate_z = aux_feats
     baseline = 15000.0
 
-    # Yelp multipliers
-    rat_mult = 1.0 + (rating - 4.0) * 0.07          # +/- ~7% per star around 4.0
-    rev_mult = 1.0 + min(reviews, 1000) / 10000.0   # up to +10% from heavy review volume
-    buzz_mult = 1.0 + (yelp_sent - 50) / 500.0      # +/-10% around 50
-
-    # Foot traffic proxy
-    foot_mult = 0.8 + foot  # 0.8–1.3 rough range (0.3→1.1, 0.8→1.6) clamped later
-
-    # Macro multipliers from z-scores
+    rat_mult  = 1.0 + (rating - 4.0) * 0.07
+    rev_mult  = 1.0 + min(reviews, 1000) / 10000.0
+    buzz_mult = 1.0 + (yelp_sent - 50) / 500.0
+    foot_mult = 0.8 + foot
     macro_mult = (1.0 + 0.05 * rrsfs_z) * (1.0 + 0.04 * umcsent_z) * (1.0 - 0.04 * unrate_z)
 
-    heuristic = baseline * rat_mult * rev_mult * buzz_mult * foot_mult * macro_mult
-    heuristic = float(np.clip(heuristic, 3000, 75000))
+    heuristic = float(np.clip(baseline * rat_mult * rev_mult * buzz_mult * foot_mult * macro_mult, 3000, 75000))
 
     if pred is None or np.isnan(pred) or pred < 2000 or pred > 100000:
         return heuristic
-    # Blend model with heuristic for stability
     return 0.65 * pred + 0.35 * heuristic
 
 # --- Save & Visualize ---
 def save_prediction(store, coords, pred, aux, timestamp=None):
     ts = timestamp or pd.Timestamp.now()
-    df = pd.DataFrame([[
-        store, coords[0], coords[1], store_type, pred, aux["foot"], aux["yelp_sent"],
-        aux["rating"], aux["reviews"], aux["rrsfs_z"], aux["umcsent_z"], aux["unrate_z"], ts
-    ]], columns=["store","lat","lon","type","sales","foot","social","rating","reviews",
-                 "rrsfs_z","umcsent_z","unrate_z","timestamp"])
+    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, aux["foot"], aux["yelp_sent"],
+                        aux["rating"], aux["reviews"], aux["rrsfs_z"], aux["umcsent_z"], aux["unrate_z"], ts]],
+                      columns=["store","lat","lon","type","sales","foot","social","rating","reviews",
+                               "rrsfs_z","umcsent_z","unrate_z","timestamp"])
     if os.path.exists("sales_history.csv"):
         try:
             old = pd.read_csv("sales_history.csv", on_bad_lines='skip')
@@ -458,23 +488,19 @@ def plot_insights(store):
         df = pd.read_csv("sales_history.csv", on_bad_lines='skip')
     except:
         return st.warning("Could not read history file.")
-
     dff = df[df["store"].str.lower() == store.lower()].copy()
     if dff.empty:
         return st.warning("No data found for this store yet.")
     dff["timestamp"] = pd.to_datetime(dff["timestamp"])
-
     st.subheader("📈 Sales Over Time")
     fig_sales = px.line(dff, x="timestamp", y="sales", title="Weekly Sales Forecast", markers=True)
     fig_sales.update_traces(line=dict(width=2))
     st.plotly_chart(fig_sales, use_container_width=True)
-
     st.subheader("👣 Foot Traffic vs. 📱 Online Buzz")
     df_long = dff.melt(id_vars=["timestamp"], value_vars=["foot", "social"], var_name="metric", value_name="score")
     fig_buzz = px.line(df_long, x="timestamp", y="score", color="metric", markers=True)
     fig_buzz.update_traces(line=dict(width=2))
     st.plotly_chart(fig_buzz, use_container_width=True)
-
     st.subheader("🏷️ Average Sales by Store Type")
     avg_type = df.groupby("type")["sales"].mean().reset_index()
     fig_type = px.bar(avg_type, x="type", y="sales", color="type", title="Avg Weekly Sales per Store Type")
@@ -533,9 +559,9 @@ def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=6, 
     # Macro-aware nudges
     macros = []
     if fred.get("UMCSENT", {}).get("z", 0) < -0.5:
-        macros += ["Lean into value messaging in ads; emphasize bundles and loyalty to offset weak sentiment."]
+        macros += ["Lean into value messaging; emphasize bundles and loyalty to offset weak sentiment."]
     if fred.get("UNRATE", {}).get("z", 0) > 0.5:
-        macros += ["Promote budget-friendly options and limited-time deals to protect traffic during soft labor markets."]
+        macros += ["Promote budget-friendly options and limited-time deals to protect traffic during softer labor markets."]
     if fred.get("RRSFS", {}).get("z", 0) > 0.5:
         macros += ["Experiment with premium add-ons while retail demand is above trend."]
 
@@ -591,7 +617,7 @@ coords = None
 if store and zip_code and town and state:
     candidates = get_coords_from_store_name(store, zip_code, town, state)
     if candidates:
-        coords = show_map_with_selection(candidates)
+        coords = show_map_with_selection(candidates)  # red pin + circle
     else:
         st.warning("Location not found or outside ZIP radius.")
 
@@ -603,18 +629,73 @@ if coords:
     image = fetch_or_upload_satellite_image(coords)
     st.image(image, caption="🛰️ Satellite View", use_container_width=True)
 
-    # Yelp Insights
+    # Yelp Insights (coords-first to avoid Yelp 400s)
     yelp_location_hint = zip_code or f"{town}, {norm_state(state)}"
-    yelp_insights = get_yelp_insights(store, yelp_location_hint)
-    if yelp_insights:
+    yelp = get_yelp_insights(store, yelp_location_hint, coords=coords)
+
+    def _stars(rating):
+        try:
+            r = float(rating)
+        except:
+            return "—"
+        full = "★" * int(r)
+        half = "½" if r - int(r) >= 0.5 else ""
+        empty = "☆" * max(0, 5 - int(r) - (1 if half else 0))
+        return full + half + empty
+
+    if yelp:
         st.subheader("📖 Yelp Insights")
-        st.write(f"**Store Name**: {yelp_insights['name']}")
-        st.write(f"**Rating**: {yelp_insights['rating']}⭐")
-        st.write(f"**Reviews**: {yelp_insights['review_count']} reviews")
-        st.write(f"**Categories**: {yelp_insights['categories']}")
-        st.write(f"**Location**: {yelp_insights['location']}")
-        st.write(f"**Phone**: {yelp_insights['phone']}")
-        st.write(f"[Yelp Link]({yelp_insights['yelp_url']})")
+        left, right = st.columns([2,1])
+        with left:
+            title = f"**{yelp['name']}**"
+            if yelp.get("price"):
+                title += f" · {yelp['price']}"
+            if yelp.get("is_closed") is True:
+                title += " · _Closed_"
+            st.markdown(title)
+
+            st.write(f"**Rating**: {yelp['rating']} {_stars(yelp['rating'])}  ·  **Reviews**: {yelp['review_count']}")
+            st.write(f"**Categories**: {yelp['categories']}")
+            st.write(f"**Address**: {yelp.get('display_address') or yelp['location']}")
+            if yelp.get("transactions"):
+                st.write("**Transactions**: " + ", ".join(yelp["transactions"]))
+            st.write(f"**Phone**: {yelp['phone'] or 'N/A'}")
+            st.write(f"[Open on Yelp]({yelp['yelp_url']})")
+
+            # Hours (today)
+            if yelp.get("hours"):
+                todays = yelp["hours"][0].get("open", [])
+                if todays:
+                    import datetime as _dt
+                    dow = _dt.datetime.today().weekday()  # 0=Mon
+                    todays_spans = [o for o in todays if o.get("day") == dow]
+                    st.markdown("**Hours (today)**")
+                    if todays_spans:
+                        for span in todays_spans:
+                            s = span.get("start","")
+                            e = span.get("end","")
+                            if len(s) >= 4 and len(e) >= 4:
+                                st.write(f"{s[:2]}:{s[2:]}–{e[:2]}:{e[2:]}")
+                            else:
+                                st.write("—")
+                    else:
+                        st.write("—")
+
+            # Up to 3 recent review snippets
+            if yelp.get("top_reviews"):
+                st.markdown("**Recent Reviews**")
+                for r in yelp["top_reviews"]:
+                    author = (r.get("user") or {}).get("name", "Anonymous")
+                    rr = r.get("rating", "?")
+                    txt = r.get("text","").strip()
+                    st.write(f"• _{author}_ — {rr}⭐: {txt}")
+
+        with right:
+            photos = yelp.get("photos") or []
+            if photos:
+                for p in photos[:3]:
+                    if p:
+                        st.image(p, use_container_width=True)
     elif not YELP_API_KEY:
         st.info("Add a Yelp API key in Streamlit Secrets to enable Yelp Insights.")
 
@@ -651,11 +732,9 @@ if coords:
             pred = hybrid_prediction(model, model_feats, aux_feats)
             st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}**")
 
-            # Save & Plots
             save_prediction(store, coords, pred, st.session_state['aux_feats'])
             plot_insights(store)
 
-            # Strategy
             st.subheader("📦 Strategy Recommendations")
             for r in generate_recommendations(store, store_type,
                                               st.session_state['aux_feats']['foot'],
