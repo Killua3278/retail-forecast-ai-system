@@ -23,21 +23,44 @@ from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.dummy import DummyRegressor
 import time
 from bs4 import BeautifulSoup
-from math import radians, sin, cos, asin, sqrt  # <-- added
-import random  # <-- added
+from math import radians, sin, cos, asin, sqrt
+import random
 
 load_dotenv()
-
 st.set_page_config(page_title="Retail AI Platform", layout="wide")
 
-# --- API Keys ---
-YELP_API_KEY = os.getenv("YELP_API_KEY")
-YELP_HEADERS = {"Authorization": f"Bearer {YELP_API_KEY}"} if YELP_API_KEY else {}
+# --- Secrets helpers (NEW) ---
+def _get_secret(name, section="api"):
+    # Prefer Streamlit secrets → env
+    try:
+        return st.secrets[section][name]
+    except Exception:
+        return os.getenv(name)
+
+def _mask(s):
+    return s[:4] + "…" + s[-4:] if s and len(s) > 8 else "(unset)"
+
+# --- API Keys (Yelp override enabled) ---
+# Load initial keys
+YELP_API_KEY = _get_secret("x-JwHOmHyCu7HTbcJXF_C7rluQKZB6Qs3GJJPO-88XmSLL0oBqrYhBeSaWeu3ogtSgDPWr4JU286MXBVk52tBqm3c0Bf8i0i92DmKdByL4d_Ao-dhmra5FzirBWFaHYx")
+GOOGLE_MAPS_API_KEY = _get_secret("AIzaSyAWN_hzZb80EY0dSUKsC50Ys-XZKg9c8SM")
+FRED_API_KEY = _get_secret("2b3d6cd4f1beaff485e00e9ced088b10")
 
 # --- Sidebar ---
 st.sidebar.title("🔧 Settings")
 store_type = st.sidebar.selectbox("Store Type", ["Any", "Coffee Shop", "Boutique", "Fast Food", "Other"])
 theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=1)
+
+with st.sidebar.expander("🔌 Integrations"):
+    # Optional: allow a session-only override for Yelp key (masked input)
+    yelp_override = st.text_input("Yelp API Key (session override)", type="password",
+                                  help="For local testing only. In production, use Streamlit Secrets or ENV.")
+    if yelp_override:
+        st.session_state["YELP_API_KEY"] = yelp_override
+
+    # Resolve active key (override > secrets/env)
+    YELP_API_KEY = st.session_state.get("YELP_API_KEY", YELP_API_KEY)
+    st.caption(f"Yelp key: {_mask(YELP_API_KEY) if YELP_API_KEY else '(missing)'}")
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = (theme == "Dark")
@@ -46,6 +69,9 @@ if st.sidebar.button("🥩 Clear Sales History"):
     if os.path.exists("sales_history.csv"):
         os.remove("sales_history.csv")
         st.sidebar.success("History cleared.")
+
+# Build headers from active key (after possible override)
+YELP_HEADERS = {"Authorization": f"Bearer {YELP_API_KEY}"} if YELP_API_KEY else {}
 
 # --- Theme Styling ---
 def set_theme():
@@ -69,7 +95,7 @@ def set_theme():
     st.markdown(style, unsafe_allow_html=True)
 set_theme()
 
-# --- Geo/units helpers (NEW) ---
+# --- Geo/units helpers ---
 STATE_ABBR = {
     "alabama":"AL","alaska":"AK","arizona":"AZ","arkansas":"AR","california":"CA","colorado":"CO","connecticut":"CT",
     "delaware":"DE","florida":"FL","georgia":"GA","hawaii":"HI","idaho":"ID","illinois":"IL","indiana":"IN","iowa":"IA",
@@ -80,10 +106,8 @@ STATE_ABBR = {
     "texas":"TX","utah":"UT","vermont":"VT","virginia":"VA","washington":"WA","west virginia":"WV","wisconsin":"WI","wyoming":"WY",
     "dc":"DC","district of columbia":"DC"
 }
-
 def norm_state(s: str) -> str:
-    if not s:
-        return ""
+    if not s: return ""
     s = s.strip()
     k = s.lower()
     return STATE_ABBR.get(k, s.upper() if len(s) == 2 else s)
@@ -108,6 +132,10 @@ def search_yelp_business(name, location):
             js = r.json()
             if js.get("businesses"):
                 return js["businesses"][0]
+        elif r.status_code in (401, 403):
+            st.warning("Yelp API: unauthorized. Check that your key is valid and has not been rate-limited.")
+        else:
+            st.info(f"Yelp API returned {r.status_code}.")
     except requests.RequestException:
         pass
     return None
@@ -128,7 +156,12 @@ def get_yelp_insights(store, location):
         "rating": business.get("rating", "N/A"),
         "review_count": business.get("review_count", "N/A"),
         "categories": ", ".join([cat["title"] for cat in business.get("categories", [])]),
-        "location": business.get("location", {}).get("address1", "N/A"),
+        "location": ", ".join(filter(None, [
+            business.get("location", {}).get("address1", ""),
+            business.get("location", {}).get("city", ""),
+            business.get("location", {}).get("state", ""),
+            business.get("location", {}).get("zip_code", "")
+        ])) or "N/A",
         "phone": business.get("phone", "N/A"),
         "yelp_url": business.get("url", "N/A")
     }
@@ -140,12 +173,11 @@ def get_mock_placer_traffic(zip_code):
     hashval = sum(ord(c) for c in zip_code) % 10
     return round(0.3 + 0.05 * hashval, 2)
 
-# --- Geolocation (REPLACED) ---
+# --- Geolocation ---
 def get_coords_from_store_name(name, zip_code, town, state, radius_m=25000):
     """Return a list of candidate (lat, lon, label). Accept results within `radius_m` of ZIP centroid if available."""
     if not (name and zip_code and town and state):
         return []
-
     st_norm = norm_state(state)
     geolocator = Nominatim(user_agent="retail_ai_locator")
 
@@ -188,7 +220,6 @@ def get_coords_from_store_name(name, zip_code, town, state, radius_m=25000):
     town_loc = safe_geocode(f"{town}, {st_norm}, USA")
     if town_loc:
         return [(town_loc.latitude, town_loc.longitude, town_loc.address)]
-
     return []
 
 def show_map_with_selection(options):
@@ -204,7 +235,7 @@ def fetch_or_upload_satellite_image(coords):
     uploaded = st.file_uploader("Upload custom satellite image", type=["jpg", "jpeg", "png"])
     if uploaded:
         return Image.open(uploaded).convert("RGB")
-    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    api_key = GOOGLE_MAPS_API_KEY or os.getenv("GOOGLE_MAPS_API_KEY")
     if not api_key:
         st.error("Missing Google Maps API key")
         return Image.new("RGB", (512, 512), color=(200, 200, 200))
@@ -229,16 +260,12 @@ def extract_satellite_features(img):
 
 def build_feature_vector(img, coords, store, zip_code):
     features = np.concatenate([extract_satellite_features(img), [coords[0], coords[1]]])
-    # Keep Yelp lookup simple; location as ZIP is fine
-    business = search_yelp_business(store, zip_code)
+    business = search_yelp_business(store, zip_code)  # keep location simple
     foot = get_mock_placer_traffic(zip_code)
     soc = get_yelp_sentiment_score(business)
-
-    # Store features in session state for consistency
     st.session_state['features'] = features
     st.session_state['foot'] = foot
     st.session_state['soc'] = soc
-
     return features, foot, soc
 
 # --- Model & Prediction ---
@@ -306,11 +333,9 @@ def plot_insights(store):
     fig_type = px.bar(avg_type, x="type", y="sales", color="type", title="Avg Weekly Sales per Store Type")
     st.plotly_chart(fig_type)
 
-# --- Strategy Engine (REPLACED for variety) ---
+# --- Strategy Engine (varied, non-repeating) ---
 def generate_recommendations(store, store_type, foot, soc, sales, *, n=6, seed=None):
-    rng = random.Random(seed or f"{store}-{int(time.time()//3600)}")  # rotates hourly
-
-    # Foot-traffic levers
+    rng = random.Random(seed or f"{store}-{int(time.time()//3600)}")
     low_foot = [
         "Partner with nearby gyms/schools for cross-promos (e.g., show ID for 10% off).",
         "Run a map-pin ad targeting a 2-mile radius during commute hours.",
@@ -329,8 +354,6 @@ def generate_recommendations(store, store_type, foot, soc, sales, *, n=6, seed=N
         "Loyalty ladder: free item at 5 visits, premium at 10 to raise repeat rate.",
         "Place impulse items within 3 feet of POS to lift average ticket.",
     ]
-
-    # Social/buzz levers
     weak_buzz = [
         "Ask for reviews via QR on receipts; thank-you coupon unlocks after posting.",
         "Refresh Google/Yelp photos with bright, current shots; add alt text & hours.",
@@ -344,8 +367,6 @@ def generate_recommendations(store, store_type, foot, soc, sales, *, n=6, seed=N
         "Trial a micro-influencer (1–5k local followers) with a store-only code.",
         "Launch a 'VIP hour' for followers with a secret menu item.",
     ]
-
-    # Store-type flavor
     flavor = {
         "Coffee Shop": [
             "Introduce a rotating single-origin and stamp cards for trying all 3.",
@@ -359,10 +380,8 @@ def generate_recommendations(store, store_type, foot, soc, sales, *, n=6, seed=N
             "Create a try-on wall/LookBook; staff do 15-sec styling reels.",
             "Host a 'bring an item, get styled' night with RSVPs.",
         ],
-        "Any": [],
-        "Other": []
+        "Any": [], "Other": []
     }
-
     base = []
     if sales < 10000:
         base += [
@@ -375,28 +394,15 @@ def generate_recommendations(store, store_type, foot, soc, sales, *, n=6, seed=N
             "Spin up an online ordering page with curbside pickup slots.",
         ]
 
-    if foot < 0.4:
-        pool = low_foot
-    elif foot < 0.6:
-        pool = mid_foot
-    else:
-        pool = high_foot
-
-    if soc < 40:
-        pool_buzz = weak_buzz
-    elif soc < 70:
-        pool_buzz = mid_buzz
-    else:
-        pool_buzz = high_buzz
+    pool = low_foot if foot < 0.4 else mid_foot if foot < 0.6 else high_foot
+    pool_buzz = weak_buzz if soc < 40 else mid_buzz if soc < 70 else high_buzz
 
     recs = set()
     recs.update(rng.sample(pool, k=min(2, len(pool))))
     recs.update(rng.sample(pool_buzz, k=min(2, len(pool_buzz))))
     fpool = flavor.get(store_type, []) or flavor["Other"]
-    if fpool:
-        recs.update(rng.sample(fpool, k=min(1, len(fpool))))
-    if base:
-        recs.update(rng.sample(base, k=min(1, len(base))))
+    if fpool: recs.update(rng.sample(fpool, k=min(1, len(fpool))))
+    if base:  recs.update(rng.sample(base,  k=min(1, len(base))))
 
     all_pools = list({*low_foot, *mid_foot, *high_foot, *weak_buzz, *mid_buzz, *high_buzz, *sum(flavor.values(), []), *base})
     while len(recs) < n and len(recs) < len(all_pools):
@@ -438,8 +444,9 @@ if coords:
     image = fetch_or_upload_satellite_image(coords)
     st.image(image, caption="🧪 Satellite View", use_container_width=True)
 
-    # Get Yelp Insights (keep location simple: ZIP is fine)
-    yelp_insights = get_yelp_insights(store, zip_code)
+    # Yelp Insights (works if API key is present or overridden)
+    yelp_location_hint = zip_code or f"{town}, {norm_state(state)}"
+    yelp_insights = get_yelp_insights(store, yelp_location_hint)
     if yelp_insights:
         st.subheader("📖 Yelp Insights")
         st.write(f"**Store Name**: {yelp_insights['name']}")
@@ -449,6 +456,8 @@ if coords:
         st.write(f"**Location**: {yelp_insights['location']}")
         st.write(f"**Phone**: {yelp_insights['phone']}")
         st.write(f"[Yelp Link]({yelp_insights['yelp_url']})")
+    elif not YELP_API_KEY:
+        st.info("x-JwHOmHyCu7HTbcJXF_C7rluQKZB6Qs3GJJPO-88XmSLL0oBqrYhBeSaWeu3ogtSgDPWr4JU286MXBVk52tBqm3c0Bf8i0i92DmKdByL4d_Ao-dhmra5FzirBWFaHYx")
 
     if st.button("📊 Predict & Analyze"):
         try:
