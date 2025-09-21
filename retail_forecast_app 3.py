@@ -1,4 +1,4 @@
-# ✅ Fully Integrated Retail AI App with Yelp, ZIP, Satellite, and Strategy Intelligence + Improved Visualizations + Advanced Recommendations
+# ✅ Retail AI App — Yelp + ZIP + Satellite + FRED Macros + Strategy Intelligence
 
 # --- Imports and Setup ---
 import streamlit as st
@@ -25,26 +25,43 @@ import time
 from bs4 import BeautifulSoup
 from math import radians, sin, cos, asin, sqrt
 import random
+from datetime import datetime, timedelta
 
 load_dotenv()
 st.set_page_config(page_title="Retail AI Platform", layout="wide")
 
-# --- Secrets helpers (NEW) ---
-def _get_secret(name, section="api"):
-    # Prefer Streamlit secrets → env
-    try:
-        return st.secrets[section][name]
-    except Exception:
-        return os.getenv(name)
+# --- Secrets helpers ---
+def _try_secrets(path_list):
+    """Try multiple locations inside st.secrets (root, sections)"""
+    cur = st.secrets if hasattr(st, "secrets") else {}
+    for key in path_list:
+        try:
+            cur = cur[key]
+        except Exception:
+            return None
+    return cur
+
+def get_secret(name):
+    """
+    Resolve secret from:
+      1) st.secrets[name]
+      2) st.secrets['api'][name]
+      3) st.secrets['general'][name]
+      4) os.environ[name]
+    """
+    val = None
+    val = _try_secrets([name]) or _try_secrets(["api", name]) or _try_secrets(["general", name])
+    if not val:
+        val = os.getenv(name)
+    return val
 
 def _mask(s):
     return s[:4] + "…" + s[-4:] if s and len(s) > 8 else "(unset)"
 
-# --- API Keys (Yelp override enabled) ---
-# Load initial keys
-YELP_API_KEY = _get_secret("x-JwHOmHyCu7HTbcJXF_C7rluQKZB6Qs3GJJPO-88XmSLL0oBqrYhBeSaWeu3ogtSgDPWr4JU286MXBVk52tBqm3c0Bf8i0i92DmKdByL4d_Ao-dhmra5FzirBWFaHYx")
-GOOGLE_MAPS_API_KEY = _get_secret("AIzaSyAWN_hzZb80EY0dSUKsC50Ys-XZKg9c8SM")
-FRED_API_KEY = _get_secret("2b3d6cd4f1beaff485e00e9ced088b10")
+# --- API Keys (from Secrets/Env) ---
+YELP_API_KEY = get_secret("YELP_API_KEY")
+GOOGLE_MAPS_API_KEY = get_secret("GOOGLE_MAPS_API_KEY")
+FRED_API_KEY = get_secret("FRED_API_KEY")
 
 # --- Sidebar ---
 st.sidebar.title("🔧 Settings")
@@ -52,15 +69,9 @@ store_type = st.sidebar.selectbox("Store Type", ["Any", "Coffee Shop", "Boutique
 theme = st.sidebar.radio("Theme", ["Light", "Dark"], index=1)
 
 with st.sidebar.expander("🔌 Integrations"):
-    # Optional: allow a session-only override for Yelp key (masked input)
-    yelp_override = st.text_input("Yelp API Key (session override)", type="password",
-                                  help="For local testing only. In production, use Streamlit Secrets or ENV.")
-    if yelp_override:
-        st.session_state["YELP_API_KEY"] = yelp_override
-
-    # Resolve active key (override > secrets/env)
-    YELP_API_KEY = st.session_state.get("YELP_API_KEY", YELP_API_KEY)
-    st.caption(f"Yelp key: {_mask(YELP_API_KEY) if YELP_API_KEY else '(missing)'}")
+    st.caption(f"Google Maps: {_mask(GOOGLE_MAPS_API_KEY) if GOOGLE_MAPS_API_KEY else '(missing)'}")
+    st.caption(f"Yelp: {_mask(YELP_API_KEY) if YELP_API_KEY else '(missing)'}")
+    st.caption(f"FRED: {_mask(FRED_API_KEY) if FRED_API_KEY else '(missing)'}")
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = (theme == "Dark")
@@ -70,7 +81,7 @@ if st.sidebar.button("🥩 Clear Sales History"):
         os.remove("sales_history.csv")
         st.sidebar.success("History cleared.")
 
-# Build headers from active key (after possible override)
+# Build headers from active key
 YELP_HEADERS = {"Authorization": f"Bearer {YELP_API_KEY}"} if YELP_API_KEY else {}
 
 # --- Theme Styling ---
@@ -133,7 +144,7 @@ def search_yelp_business(name, location):
             if js.get("businesses"):
                 return js["businesses"][0]
         elif r.status_code in (401, 403):
-            st.warning("Yelp API: unauthorized. Check that your key is valid and has not been rate-limited.")
+            st.warning("Yelp API unauthorized/rate-limited. Verify key and quotas.")
         else:
             st.info(f"Yelp API returned {r.status_code}.")
     except requests.RequestException:
@@ -143,8 +154,9 @@ def search_yelp_business(name, location):
 def get_yelp_sentiment_score(business):
     if not business:
         return 50.0
-    rating = business.get("rating", 3.0)
-    review_count = business.get("review_count", 0)
+    rating = business.get("rating", 3.0) or 3.0
+    review_count = business.get("review_count", 0) or 0
+    # rating centered at 3.0; mild lift from review volume
     return round(min(100, max(0, (rating - 3) * 25 + review_count * 0.1)), 1)
 
 def get_yelp_insights(store, location):
@@ -163,7 +175,8 @@ def get_yelp_insights(store, location):
             business.get("location", {}).get("zip_code", "")
         ])) or "N/A",
         "phone": business.get("phone", "N/A"),
-        "yelp_url": business.get("url", "N/A")
+        "yelp_url": business.get("url", "N/A"),
+        "coordinates": business.get("coordinates", {})
     }
     return yelp_data
 
@@ -172,6 +185,77 @@ def get_mock_placer_traffic(zip_code):
         return 0.45
     hashval = sum(ord(c) for c in zip_code) % 10
     return round(0.3 + 0.05 * hashval, 2)
+
+# --- FRED Macros ---
+FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
+
+def fred_series(series_id, api_key=FRED_API_KEY, months=24):
+    """Fetch last N months of a FRED series, return pandas Series of floats indexed by date."""
+    if not api_key:
+        return pd.Series(dtype=float)
+    start_date = (datetime.today() - timedelta(days=31*months)).strftime("%Y-%m-%d")
+    params = {
+        "series_id": series_id,
+        "api_key": api_key,
+        "file_type": "json",
+        "observation_start": start_date
+    }
+    try:
+        r = requests.get(FRED_BASE, params=params, timeout=12)
+        r.raise_for_status()
+        data = r.json().get("observations", [])
+        dates = []
+        vals = []
+        for o in data:
+            v = o.get("value")
+            if v is None or v in ("", "."):
+                continue
+            try:
+                vals.append(float(v))
+                dates.append(pd.to_datetime(o["date"]))
+            except:
+                continue
+        if not vals:
+            return pd.Series(dtype=float)
+        s = pd.Series(vals, index=pd.to_datetime(dates)).sort_index()
+        return s
+    except Exception:
+        return pd.Series(dtype=float)
+
+def fred_features():
+    """
+    Pull macro features:
+      - RRSFS: Real Retail & Food Services Sales (index; higher is good)
+      - UMCSENT: Consumer Sentiment (higher is good)
+      - UNRATE: Unemployment Rate (lower is good)
+    Return dict with latest, YoY pct change, and z-scores for each.
+    """
+    series_map = {
+        "RRSFS": "RRSFS",   # Real Retail & Food Services Sales
+        "UMCSENT": "UMCSENT",  # Consumer Sentiment
+        "UNRATE": "UNRATE"  # Unemployment rate
+    }
+    out = {}
+    for key, sid in series_map.items():
+        s = fred_series(sid)
+        if s.empty:
+            out[key] = {"latest": None, "yoy": None, "z": 0.0}
+            continue
+        latest = s.iloc[-1]
+        # YoY change: compare to value ~12 months earlier if available
+        prev_idx = s.index.searchsorted(s.index[-1] - pd.DateOffset(years=1))
+        yoy = None
+        if 0 <= prev_idx < len(s):
+            prev = s.iloc[prev_idx]
+            if prev != 0:
+                yoy = (latest - prev) / abs(prev)
+        # z-score using rolling window for robustness
+        roll = s.rolling(12, min_periods=6)
+        mean = roll.mean().iloc[-1]
+        std = roll.std(ddof=0).iloc[-1] or 1.0
+        z = float((latest - mean) / std) if std else 0.0
+        out[key] = {"latest": float(latest), "yoy": float(yoy) if yoy is not None else None, "z": z}
+    return out
 
 # --- Geolocation ---
 def get_coords_from_store_name(name, zip_code, town, state, radius_m=25000):
@@ -195,26 +279,25 @@ def get_coords_from_store_name(name, zip_code, town, state, radius_m=25000):
 
     # 2) Try Yelp near ZIP (preferred) else "town, ST"
     yelp_loc_str = zip_code if zip_anchor else f"{town}, {st_norm}"
-    business = search_yelp_business(name, yelp_loc_str)
-    if business:
-        c = business.get("coordinates") or {}
+    ybiz = search_yelp_business(name, yelp_loc_str)
+    if ybiz:
+        c = ybiz.get("coordinates") or {}
         lat, lon = c.get("latitude"), c.get("longitude")
         if lat and lon:
-            lbl = f"{business.get('name','Business')}, {business.get('location',{}).get('address1','Yelp')}"
+            lbl = f"{ybiz.get('name','Business')}, {ybiz.get('location',{}).get('address1','Yelp')}"
             if not zip_anchor or haversine_m(lat, lon, *zip_anchor) <= radius_m:
                 return [(lat, lon, lbl)]
 
     # 3) Geocode combinations (name constrained to area)
-    q1 = f"{name}, {town}, {st_norm}, {zip_code}, USA"
-    q2 = f"{name}, {zip_code}, USA"
-    q3 = f"{name}, {town}, {st_norm}, USA"
-    for q in (q1, q2, q3):
+    for q in (f"{name}, {town}, {st_norm}, {zip_code}, USA",
+              f"{name}, {zip_code}, USA",
+              f"{name}, {town}, {st_norm}, USA"):
         loc = safe_geocode(q)
         if loc:
             if not zip_anchor or haversine_m(loc.latitude, loc.longitude, *zip_anchor) <= radius_m:
                 return [(loc.latitude, loc.longitude, loc.address)]
 
-    # 4) Fall back to anchors so user can still proceed
+    # 4) Fall back to anchors so user can proceed
     if zip_anchor:
         return [(zip_anchor[0], zip_anchor[1], f"{zip_code} centroid")]
     town_loc = safe_geocode(f"{town}, {st_norm}, USA")
@@ -235,13 +318,13 @@ def fetch_or_upload_satellite_image(coords):
     uploaded = st.file_uploader("Upload custom satellite image", type=["jpg", "jpeg", "png"])
     if uploaded:
         return Image.open(uploaded).convert("RGB")
-    api_key = GOOGLE_MAPS_API_KEY or os.getenv("GOOGLE_MAPS_API_KEY")
+    api_key = GOOGLE_MAPS_API_KEY
     if not api_key:
         st.error("Missing Google Maps API key")
         return Image.new("RGB", (512, 512), color=(200, 200, 200))
     try:
         url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=18&size=600x400&maptype=satellite&key={api_key}"
-        res = requests.get(url)
+        res = requests.get(url, timeout=12)
         res.raise_for_status()
         return Image.open(io.BytesIO(res.content)).convert("RGB")
     except Exception as e:
@@ -258,19 +341,46 @@ def extract_satellite_features(img):
         features = model(tensor).view(1, -1).numpy().flatten()
     return np.resize(features, 512)
 
-def build_feature_vector(img, coords, store, zip_code):
-    features = np.concatenate([extract_satellite_features(img), [coords[0], coords[1]]])
-    business = search_yelp_business(store, zip_code)  # keep location simple
+# --- Feature builder (Yelp + Foot + FRED) ---
+def build_feature_vector(img, coords, store, zip_code, town=None, state=None, fred=None):
+    sat = extract_satellite_features(img)
+    latlon = np.array([coords[0], coords[1]], dtype=float)
+
+    # Yelp (localized by ZIP or "town, ST")
+    yelp_loc = zip_code or (f"{town}, {norm_state(state)}" if (town and state) else "")
+    ybiz = search_yelp_business(store, yelp_loc)
+    rating = (ybiz or {}).get("rating", 3.0) or 3.0
+    reviews = (ybiz or {}).get("review_count", 0) or 0
+    yelp_sent = get_yelp_sentiment_score(ybiz)
+
+    # Foot traffic proxy
     foot = get_mock_placer_traffic(zip_code)
-    soc = get_yelp_sentiment_score(business)
-    st.session_state['features'] = features
-    st.session_state['foot'] = foot
-    st.session_state['soc'] = soc
-    return features, foot, soc
+
+    # FRED macro features
+    fred = fred or fred_features()
+    rrsfs_z = fred.get("RRSFS", {}).get("z", 0.0) or 0.0
+    umcsent_z = fred.get("UMCSENT", {}).get("z", 0.0) or 0.0
+    unrate_z = fred.get("UNRATE", {}).get("z", 0.0) or 0.0
+
+    aux = np.array([
+        rating, reviews, yelp_sent, foot,
+        rrsfs_z, umcsent_z, unrate_z
+    ], dtype=float)
+
+    # Full feature vector for model (keeps old shape first 514; we append aux safely)
+    # If a pre-trained model expects 514 dims, we can still pass only 514; keep AUX for heuristic.
+    model_feats = np.concatenate([sat, latlon], axis=0)   # len 514
+    aux_feats = aux                                      # len 7
+
+    st.session_state['aux_feats'] = {
+        "rating": rating, "reviews": reviews, "yelp_sent": yelp_sent, "foot": foot,
+        "rrsfs_z": rrsfs_z, "umcsent_z": umcsent_z, "unrate_z": unrate_z
+    }
+    return model_feats, aux_feats
 
 # --- Model & Prediction ---
 def load_fallback_model():
-    dummy = DummyRegressor(strategy="constant", constant=np.random.randint(10000, 30000))
+    dummy = DummyRegressor(strategy="constant", constant=np.random.randint(12000, 24000))
     dummy.fit([[0]*514], [dummy.constant])
     return dummy
 
@@ -288,13 +398,51 @@ def load_real_data_model():
         model.fit(X, y)
         joblib.dump(model, "model.pkl")
         return model
-    except:
+    except Exception:
         return load_fallback_model()
 
+def hybrid_prediction(model, model_feats, aux_feats):
+    """
+    Try model.predict with 514-dim features. If it fails or looks off, blend with a heuristic that
+    uses Yelp + Foot + FRED macros.
+    """
+    pred = None
+    try:
+        pred = float(model.predict([model_feats])[0])
+    except Exception:
+        pred = None
+
+    # Heuristic baseline (15k) scaled by signals
+    rating, reviews, yelp_sent, foot, rrsfs_z, umcsent_z, unrate_z = aux_feats
+    baseline = 15000.0
+
+    # Yelp multipliers
+    rat_mult = 1.0 + (rating - 4.0) * 0.07          # +/- ~7% per star around 4.0
+    rev_mult = 1.0 + min(reviews, 1000) / 10000.0   # up to +10% from heavy review volume
+    buzz_mult = 1.0 + (yelp_sent - 50) / 500.0      # +/-10% around 50
+
+    # Foot traffic proxy
+    foot_mult = 0.8 + foot  # 0.8–1.3 rough range (0.3→1.1, 0.8→1.6) clamped later
+
+    # Macro multipliers from z-scores
+    macro_mult = (1.0 + 0.05 * rrsfs_z) * (1.0 + 0.04 * umcsent_z) * (1.0 - 0.04 * unrate_z)
+
+    heuristic = baseline * rat_mult * rev_mult * buzz_mult * foot_mult * macro_mult
+    heuristic = float(np.clip(heuristic, 3000, 75000))
+
+    if pred is None or np.isnan(pred) or pred < 2000 or pred > 100000:
+        return heuristic
+    # Blend model with heuristic for stability
+    return 0.65 * pred + 0.35 * heuristic
+
 # --- Save & Visualize ---
-def save_prediction(store, coords, pred, foot, soc):
-    df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, foot, soc, pd.Timestamp.now()]],
-                      columns=["store", "lat", "lon", "type", "sales", "foot", "social", "timestamp"])
+def save_prediction(store, coords, pred, aux, timestamp=None):
+    ts = timestamp or pd.Timestamp.now()
+    df = pd.DataFrame([[
+        store, coords[0], coords[1], store_type, pred, aux["foot"], aux["yelp_sent"],
+        aux["rating"], aux["reviews"], aux["rrsfs_z"], aux["umcsent_z"], aux["unrate_z"], ts
+    ]], columns=["store","lat","lon","type","sales","foot","social","rating","reviews",
+                 "rrsfs_z","umcsent_z","unrate_z","timestamp"])
     if os.path.exists("sales_history.csv"):
         try:
             old = pd.read_csv("sales_history.csv", on_bad_lines='skip')
@@ -311,30 +459,29 @@ def plot_insights(store):
     except:
         return st.warning("Could not read history file.")
 
-    df = df[df["store"].str.lower() == store.lower()]
-    if df.empty:
-        return st.warning("No data found.")
-
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    dff = df[df["store"].str.lower() == store.lower()].copy()
+    if dff.empty:
+        return st.warning("No data found for this store yet.")
+    dff["timestamp"] = pd.to_datetime(dff["timestamp"])
 
     st.subheader("📈 Sales Over Time")
-    fig_sales = px.line(df, x="timestamp", y="sales", title="Weekly Sales Forecast", markers=True)
+    fig_sales = px.line(dff, x="timestamp", y="sales", title="Weekly Sales Forecast", markers=True)
     fig_sales.update_traces(line=dict(width=2))
-    st.plotly_chart(fig_sales)
+    st.plotly_chart(fig_sales, use_container_width=True)
 
     st.subheader("👣 Foot Traffic vs. 📱 Online Buzz")
-    df_long = df.melt(id_vars=["timestamp"], value_vars=["foot", "social"], var_name="metric", value_name="score")
+    df_long = dff.melt(id_vars=["timestamp"], value_vars=["foot", "social"], var_name="metric", value_name="score")
     fig_buzz = px.line(df_long, x="timestamp", y="score", color="metric", markers=True)
     fig_buzz.update_traces(line=dict(width=2))
-    st.plotly_chart(fig_buzz)
+    st.plotly_chart(fig_buzz, use_container_width=True)
 
-    avg_type = df.groupby("type")["sales"].mean().reset_index()
     st.subheader("🏷️ Average Sales by Store Type")
+    avg_type = df.groupby("type")["sales"].mean().reset_index()
     fig_type = px.bar(avg_type, x="type", y="sales", color="type", title="Avg Weekly Sales per Store Type")
-    st.plotly_chart(fig_type)
+    st.plotly_chart(fig_type, use_container_width=True)
 
-# --- Strategy Engine (varied, non-repeating) ---
-def generate_recommendations(store, store_type, foot, soc, sales, *, n=6, seed=None):
+# --- Strategy Engine (macro-aware, varied) ---
+def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=6, seed=None):
     rng = random.Random(seed or f"{store}-{int(time.time()//3600)}")
     low_foot = [
         "Partner with nearby gyms/schools for cross-promos (e.g., show ID for 10% off).",
@@ -382,6 +529,16 @@ def generate_recommendations(store, store_type, foot, soc, sales, *, n=6, seed=N
         ],
         "Any": [], "Other": []
     }
+
+    # Macro-aware nudges
+    macros = []
+    if fred.get("UMCSENT", {}).get("z", 0) < -0.5:
+        macros += ["Lean into value messaging in ads; emphasize bundles and loyalty to offset weak sentiment."]
+    if fred.get("UNRATE", {}).get("z", 0) > 0.5:
+        macros += ["Promote budget-friendly options and limited-time deals to protect traffic during soft labor markets."]
+    if fred.get("RRSFS", {}).get("z", 0) > 0.5:
+        macros += ["Experiment with premium add-ons while retail demand is above trend."]
+
     base = []
     if sales < 10000:
         base += [
@@ -403,8 +560,9 @@ def generate_recommendations(store, store_type, foot, soc, sales, *, n=6, seed=N
     fpool = flavor.get(store_type, []) or flavor["Other"]
     if fpool: recs.update(rng.sample(fpool, k=min(1, len(fpool))))
     if base:  recs.update(rng.sample(base,  k=min(1, len(base))))
+    if macros: recs.update(rng.sample(macros, k=min(1, len(macros))))
 
-    all_pools = list({*low_foot, *mid_foot, *high_foot, *weak_buzz, *mid_buzz, *high_buzz, *sum(flavor.values(), []), *base})
+    all_pools = list({*low_foot, *mid_foot, *high_foot, *weak_buzz, *mid_buzz, *high_buzz, *sum(flavor.values(), []), *base, *macros})
     while len(recs) < n and len(recs) < len(all_pools):
         recs.add(rng.choice(all_pools))
 
@@ -441,10 +599,11 @@ if not coords:
     coords = show_map_with_selection([(40.7128, -74.0060, "New York (default)")])
 
 if coords:
+    # Satellite
     image = fetch_or_upload_satellite_image(coords)
-    st.image(image, caption="🧪 Satellite View", use_container_width=True)
+    st.image(image, caption="🛰️ Satellite View", use_container_width=True)
 
-    # Yelp Insights (works if API key is present or overridden)
+    # Yelp Insights
     yelp_location_hint = zip_code or f"{town}, {norm_state(state)}"
     yelp_insights = get_yelp_insights(store, yelp_location_hint)
     if yelp_insights:
@@ -457,18 +616,52 @@ if coords:
         st.write(f"**Phone**: {yelp_insights['phone']}")
         st.write(f"[Yelp Link]({yelp_insights['yelp_url']})")
     elif not YELP_API_KEY:
-        st.info("x-JwHOmHyCu7HTbcJXF_C7rluQKZB6Qs3GJJPO-88XmSLL0oBqrYhBeSaWeu3ogtSgDPWr4JU286MXBVk52tBqm3c0Bf8i0i92DmKdByL4d_Ao-dhmra5FzirBWFaHYx")
+        st.info("Add a Yelp API key in Streamlit Secrets to enable Yelp Insights.")
 
+    # FRED Macro Panel
+    macros = fred_features() if FRED_API_KEY else {}
+    st.subheader("🏦 Macro Snapshot (FRED)")
+    if macros:
+        col1, col2, col3 = st.columns(3)
+        def fmt(v, pct=False):
+            if v is None: return "—"
+            return f"{v*100:.1f}%" if pct else f"{v:.2f}"
+        with col1:
+            st.markdown("**RRSFS (Real Retail & Food Services)**")
+            st.write("z-score:", f"{macros['RRSFS']['z']:.2f}" if macros['RRSFS']['z'] is not None else "—")
+            st.write("YoY:", fmt(macros['RRSFS']['yoy'], pct=True))
+        with col2:
+            st.markdown("**UMCSENT (Consumer Sentiment)**")
+            st.write("z-score:", f"{macros['UMCSENT']['z']:.2f}" if macros['UMCSENT']['z'] is not None else "—")
+            st.write("YoY:", fmt(macros['UMCSENT']['yoy'], pct=True))
+        with col3:
+            st.markdown("**UNRATE (Unemployment)**")
+            st.write("z-score:", f"{macros['UNRATE']['z']:.2f}" if macros['UNRATE']['z'] is not None else "—")
+            st.write("YoY:", fmt(macros['UNRATE']['yoy'], pct=True))
+    else:
+        st.info("Add a FRED_API_KEY in Streamlit Secrets to enable macro-aware modeling.")
+
+    # Predict & Analyze
     if st.button("📊 Predict & Analyze"):
         try:
-            features, foot, soc = build_feature_vector(image, coords, store, zip_code)
+            model_feats, aux_feats = build_feature_vector(
+                image, coords, store, zip_code, town=town, state=state, fred=macros
+            )
             model = load_real_data_model()
-            pred = max(model.predict([features])[0], 0)
+            pred = hybrid_prediction(model, model_feats, aux_feats)
             st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}**")
-            save_prediction(store, coords, pred, foot, soc)
+
+            # Save & Plots
+            save_prediction(store, coords, pred, st.session_state['aux_feats'])
             plot_insights(store)
+
+            # Strategy
             st.subheader("📦 Strategy Recommendations")
-            for r in generate_recommendations(store, store_type, foot, soc, pred):
+            for r in generate_recommendations(store, store_type,
+                                              st.session_state['aux_feats']['foot'],
+                                              st.session_state['aux_feats']['yelp_sent'],
+                                              pred, macros):
                 st.markdown(f"- {r}")
         except Exception as e:
             st.error(f"❌ Prediction failed: {e}")
+
