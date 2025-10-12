@@ -15,8 +15,12 @@ from streamlit_folium import st_folium
 import folium
 from dotenv import load_dotenv
 import torch.nn as nn
-from torchvision import transforms
-from torchvision.models import resnet18
+try:
+    from torchvision import transforms
+    from torchvision.models import resnet18, ResNet18_Weights
+    _TV_AVAILABLE = True
+except Exception:
+    _TV_AVAILABLE = False
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from sklearn.ensemble import GradientBoostingRegressor
@@ -29,7 +33,10 @@ from datetime import datetime, timedelta
 load_dotenv()
 st.set_page_config(page_title="Retail AI Platform", layout="wide")
 
-# --- Secrets helpers ---
+# =========================
+# Helpers: Secrets & Logging
+# =========================
+
 def _try_secrets(path_list):
     cur = st.secrets if hasattr(st, "secrets") else {}
     for key in path_list:
@@ -40,13 +47,6 @@ def _try_secrets(path_list):
     return cur
 
 def get_secret(name):
-    """
-    Resolve secret from:
-      1) st.secrets[name]
-      2) st.secrets['api'][name]
-      3) st.secrets['general'][name]
-      4) os.environ[name]
-    """
     val = _try_secrets([name]) or _try_secrets(["api", name]) or _try_secrets(["general", name])
     if not val:
         val = os.getenv(name)
@@ -112,22 +112,71 @@ STATE_ABBR = {
     "texas":"TX","utah":"UT","vermont":"VT","virginia":"VA","washington":"WA","west virginia":"WV","wisconsin":"WI","wyoming":"WY",
     "dc":"DC","district of columbia":"DC"
 }
+
 def norm_state(s: str) -> str:
     if not s: return ""
     s = s.strip()
     k = s.lower()
     return STATE_ABBR.get(k, s.upper() if len(s) == 2 else s)
 
-def haversine_m(lat1, lon1, lat2, lon2):
-    R = 6371000.0
-    φ1, φ2 = radians(lat1), radians(lat2)
-    dφ, dλ = radians(lat2-lat1), radians(lon2-lon1)
-    a = sin(dφ/2)**2 + cos(φ1)*cos(φ2)*sin(dλ/2)**2
-    return 2*R*asin(sqrt(a))
+# =========================
+# Robust Geocoding (Google → Nominatim → hardcoded ZIP fallback)
+# =========================
+@st.cache_data(show_spinner=False)
+def geocode_google(query: str):
+    if not GOOGLE_MAPS_API_KEY:
+        return None
+    try:
+        url = "https://maps.googleapis.com/maps/api/geocode/json"
+        r = requests.get(url, params={"address": query, "key": GOOGLE_MAPS_API_KEY}, timeout=12)
+        js = r.json()
+        if js.get("status") == "OK" and js.get("results"):
+            loc = js["results"][0]["geometry"]["location"]
+            return float(loc["lat"]), float(loc["lng"]), js["results"][0].get("formatted_address", query)
+    except Exception:
+        pass
+    return None
+
+@st.cache_data(show_spinner=False)
+def geocode_nominatim(query: str):
+    geolocator = Nominatim(user_agent="retail_ai_locator")
+    for _ in range(2):
+        try:
+            hit = geolocator.geocode(query, exactly_one=True, timeout=10)
+            if hit:
+                return float(hit.latitude), float(hit.longitude), hit.address
+        except (GeocoderTimedOut, GeocoderUnavailable):
+            time.sleep(1)
+        except Exception:
+            break
+    return None
+
+ZIP_FALLBACKS = {
+    # minimal safe seeds; add more as needed
+    "08691": (40.2147, -74.6129, "08691 centroid")  # Robbinsville, NJ
+}
+
+@st.cache_data(show_spinner=False)
+def zip_centroid(zip_code: str):
+    if not zip_code:
+        return None
+    # 1) Google
+    z = geocode_google(f"{zip_code}, USA")
+    if z:
+        return z
+    # 2) Nominatim
+    z = geocode_nominatim(f"{zip_code}, USA")
+    if z:
+        return z
+    # 3) Hardcoded minimal fallback
+    if zip_code in ZIP_FALLBACKS:
+        return ZIP_FALLBACKS[zip_code]
+    return None
 
 # =========================
 # Yelp API (matches + details; resilient to 400s)
 # =========================
+@st.cache_data(show_spinner=False)
 def _yelp_get(path, params=None):
     if not YELP_API_KEY:
         return None
@@ -139,8 +188,8 @@ def _yelp_get(path, params=None):
     except requests.RequestException:
         return None
 
+@st.cache_data(show_spinner=False)
 def _yelp_matches(name, city=None, state=None, zip_code=None, address1=None):
-    """Use Yelp's fuzzy matcher to avoid search validation errors."""
     p = {"name": name, "country": "US", "match_threshold": "default"}
     if city: p["city"] = city
     if state: p["state"] = norm_state(state)
@@ -150,22 +199,24 @@ def _yelp_matches(name, city=None, state=None, zip_code=None, address1=None):
     if not js: return []
     return js.get("businesses", [])
 
+@st.cache_data(show_spinner=False)
 def _yelp_details(business_id):
     return _yelp_get(f"/businesses/{business_id}") or {}
 
+@st.cache_data(show_spinner=False)
 def _yelp_reviews(business_id, locale="en_US"):
     js = _yelp_get(f"/businesses/{business_id}/reviews", params={"locale": locale}) or {}
     return js.get("reviews", [])[:3]
 
+@st.cache_data(show_spinner=False)
 def _yelp_search(term, location=None, coords=None, limit=3):
-    """Coordinate-first search; clean fallbacks."""
     if not YELP_API_KEY or not term:
         return []
     url = "https://api.yelp.com/v3/businesses/search"
     params = {"term": term, "limit": limit, "sort_by": "best_match"}
     if coords:
         params["latitude"], params["longitude"] = float(coords[0]), float(coords[1])
-        params["radius"] = 40000  # Yelp allows up to 40km
+        params["radius"] = 40000
     elif location:
         params["location"] = location
     else:
@@ -174,18 +225,12 @@ def _yelp_search(term, location=None, coords=None, limit=3):
         r = requests.get(url, headers=YELP_HEADERS, params=params, timeout=12)
         if r.status_code == 200:
             return (r.json() or {}).get("businesses", [])
-        # silently fall back on validation errors
         return []
     except requests.RequestException:
         return []
 
+@st.cache_data(show_spinner=False)
 def find_yelp_business(name, zip_code=None, town=None, state=None, coords_hint=None):
-    """
-    Robust resolver:
-      1) matches endpoint (name + city/state/zip) → details
-      2) search with coords (if available) → top hit → details
-      3) search with location string (zip or 'town, ST') → details
-    """
     # 1) Matches
     matches = _yelp_matches(name, city=town, state=state, zip_code=zip_code)
     if matches:
@@ -194,7 +239,6 @@ def find_yelp_business(name, zip_code=None, town=None, state=None, coords_hint=N
             det = _yelp_details(bid)
             det["top_reviews"] = _yelp_reviews(bid)
             return det
-
     # 2) Search by coords
     if coords_hint:
         hits = _yelp_search(name, coords=coords_hint, limit=1)
@@ -203,9 +247,9 @@ def find_yelp_business(name, zip_code=None, town=None, state=None, coords_hint=N
             det = _yelp_details(bid)
             det["top_reviews"] = _yelp_reviews(bid)
             return det
-
     # 3) Search by location string
-    loc_str = zip_code or (f"{town}, {norm_state(state)}" if (town and state) else None)
+    st_norm = norm_state(state) if state else None
+    loc_str = zip_code or (f"{town}, {st_norm}" if (town and st_norm) else None)
     if loc_str:
         hits = _yelp_search(name, location=loc_str, limit=1)
         if hits:
@@ -213,7 +257,6 @@ def find_yelp_business(name, zip_code=None, town=None, state=None, coords_hint=N
             det = _yelp_details(bid)
             det["top_reviews"] = _yelp_reviews(bid)
             return det
-
     return None
 
 def yelp_sentiment_score(biz):
@@ -225,6 +268,7 @@ def yelp_sentiment_score(biz):
 # --- FRED Macros ---
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
+@st.cache_data(show_spinner=False)
 def fred_series(series_id, api_key=FRED_API_KEY, months=24):
     if not api_key:
         return pd.Series(dtype=float)
@@ -249,6 +293,7 @@ def fred_series(series_id, api_key=FRED_API_KEY, months=24):
     except Exception:
         return pd.Series(dtype=float)
 
+@st.cache_data(show_spinner=False)
 def fred_features():
     series_map = {"RRSFS": "RRSFS", "UMCSENT": "UMCSENT", "UNRATE": "UNRATE"}
     out = {}
@@ -269,62 +314,65 @@ def fred_features():
         out[key] = {"latest": float(latest), "yoy": float(yoy) if yoy is not None else None, "z": z}
     return out
 
-# --- Geocoding helpers ---
-def _safe_geocode(query):
-    geolocator = Nominatim(user_agent="retail_ai_locator")
-    for _ in range(3):
-        try:
-            return geolocator.geocode(query, exactly_one=True, timeout=10)
-        except (GeocoderTimedOut, GeocoderUnavailable):
-            time.sleep(1)
-    return None
-
-def _zip_centroid(zip_code):
-    z = _safe_geocode(f"{zip_code}, USA")
-    return (z.latitude, z.longitude) if z else None
-
+# =========================
+# Location Resolver
+# =========================
+@st.cache_data(show_spinner=False)
 def resolve_store_location(store, zip_code, town, state):
-    """
-    Primary: Yelp details (accurate lat/lon).
-    Fallbacks: geocode store within town/state; ZIP centroid.
-    Returns (candidates_list, yelp_details)
-    """
     candidates = []
+    # Yelp (best lat/lon when available)
     yelp = find_yelp_business(store, zip_code=zip_code, town=town, state=state)
-    if yelp:
-        c = (yelp.get("coordinates") or {})
+    if yelp and (yelp.get("coordinates") or {}):
+        c = yelp.get("coordinates")
         lat, lon = c.get("latitude"), c.get("longitude")
         if lat and lon:
-            label = f"Yelp: {yelp.get('name','')} — {', '.join(yelp.get('location',{}).get('display_address',[]) or [])}"
-            candidates.append((lat, lon, label))
-
-    # Geocode the store name within the area as a secondary hint
+            label = f"Yelp: {yelp.get('name','')} — {', '.join((yelp.get('location',{}) or {}).get('display_address',[]) or [])}"
+            candidates.append((float(lat), float(lon), label))
+    # Try Google geocoding for the store within the area
     st_norm = norm_state(state)
-    for q in (f"{store}, {town}, {st_norm}, {zip_code}, USA",
-              f"{store}, {town}, {st_norm}, USA",
-              f"{store}, {zip_code}, USA"):
-        loc = _safe_geocode(q)
-        if loc:
-            label = f"Geocode: {loc.address}"
-            ll = (loc.latitude, loc.longitude, label)
-            if ll not in candidates:
-                candidates.append(ll)
+    for q in (
+        f"{store}, {town}, {st_norm}, {zip_code}, USA",
+        f"{store}, {town}, {st_norm}, USA",
+        f"{store}, {zip_code}, USA",
+    ):
+        g = geocode_google(q)
+        if g:
+            lat, lon, addr = g
+            cand = (lat, lon, f"Geocode: {addr}")
+            if cand not in candidates:
+                candidates.append(cand)
             break
-
-    # Always include ZIP centroid as a "just in case" option
-    zc = _zip_centroid(zip_code) if zip_code else None
+    # If Google fails, try Nominatim once
+    if not candidates:
+        for q in (
+            f"{store}, {town}, {st_norm}, {zip_code}, USA",
+            f"{store}, {town}, {st_norm}, USA",
+        ):
+            g = geocode_nominatim(q)
+            if g:
+                lat, lon, addr = g
+                cand = (lat, lon, f"Geocode: {addr}")
+                if cand not in candidates:
+                    candidates.append(cand)
+                break
+    # ZIP centroid fallback (always add)
+    zc = zip_centroid(zip_code)
     if zc:
-        candidates.append((zc[0], zc[1], f"{zip_code} centroid"))
-
-    # Ensure at least one candidate (NYC as final fallback)
+        lat, lon, lab = zc
+        candidates.append((lat, lon, lab))
+    # Final hard default so map always renders
     if not candidates:
         candidates = [(40.7128, -74.0060, "New York (default)")]
-
     return candidates, yelp
+
+# =========================
+# Map UI
+# =========================
 
 def show_map_with_selection(options, *, show_radius_m=400, key="storemap"):
     st.subheader("📍 Select Your Store Location")
-    m = folium.Map(location=[options[0][0], options[0][1]], zoom_start=14, control_scale=True)
+    center = [options[0][0], options[0][1]]
+    m = folium.Map(location=center, zoom_start=14, control_scale=True)
     for lat, lon, label in options:
         folium.Marker(
             location=[lat, lon],
@@ -340,7 +388,6 @@ def show_map_with_selection(options, *, show_radius_m=400, key="storemap"):
                 fill=True,
                 fill_opacity=0.08
             ).add_to(m)
-
     state = st_folium(m, height=380, width=None, key=key)
     chosen = options[0][:2]
     if state and state.get("last_clicked"):
@@ -348,17 +395,23 @@ def show_map_with_selection(options, *, show_radius_m=400, key="storemap"):
         st.caption("Tip: map click captured — using your clicked point for all downstream steps.")
     return chosen
 
-# --- Satellite & Feature Engineering ---
+# =========================
+# Satellite & Feature Engineering
+# =========================
+
 def fetch_or_upload_satellite_image(coords):
-    uploaded = st.file_uploader("Upload custom satellite image", type=["jpg", "jpeg", "png"])
+    uploaded = st.file_uploader("Upload custom satellite image", type=["jpg", "jpeg", "png"], key="up_sat")
     if uploaded:
         return Image.open(uploaded).convert("RGB")
     api_key = GOOGLE_MAPS_API_KEY
     if not api_key:
-        st.error("Missing Google Maps API key")
+        st.warning("Missing Google Maps API key; showing placeholder image.")
         return Image.new("RGB", (512, 512), color=(200, 200, 200))
     try:
-        url = f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}&zoom=18&size=600x400&maptype=satellite&key={api_key}"
+        url = (
+            f"https://maps.googleapis.com/maps/api/staticmap?center={coords[0]},{coords[1]}"
+            f"&zoom=18&size=640x400&maptype=satellite&key={api_key}"
+        )
         res = requests.get(url, timeout=12)
         res.raise_for_status()
         return Image.open(io.BytesIO(res.content)).convert("RGB")
@@ -366,40 +419,50 @@ def fetch_or_upload_satellite_image(coords):
         st.error(f"Satellite image fetch error: {e}")
         return Image.new("RGB", (512, 512), color=(160, 160, 160))
 
+
 def extract_satellite_features(img):
-    model = resnet18(pretrained=True)
-    model.eval()
-    model = nn.Sequential(*list(model.children())[:-1])
-    transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
-    tensor = transform(img).unsqueeze(0)
-    with torch.no_grad():
-        features = model(tensor).view(1, -1).numpy().flatten()
-    return np.resize(features, 512)
+    if not _TV_AVAILABLE:
+        # Safe fallback if torchvision isn't available
+        rng = np.random.RandomState(42)
+        return rng.normal(0, 1, 512)
+    try:
+        try:
+            model = resnet18(weights=ResNet18_Weights.DEFAULT)
+        except Exception:
+            model = resnet18(pretrained=True)
+        model.eval()
+        model = nn.Sequential(*list(model.children())[:-1])
+        transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
+        tensor = transform(img).unsqueeze(0)
+        with torch.no_grad():
+            features = model(tensor).view(1, -1).numpy().flatten()
+        return np.resize(features, 512)
+    except Exception:
+        rng = np.random.RandomState(123)
+        return rng.normal(0, 1, 512)
 
 # --- Feature builder (Yelp + Foot + FRED) ---
+
 def build_feature_vector(img, coords, yelp_details, zip_code, fred=None):
     sat = extract_satellite_features(img)
     latlon = np.array([coords[0], coords[1]], dtype=float)
-
     rating = (yelp_details or {}).get("rating", 3.0) or 3.0
     reviews = (yelp_details or {}).get("review_count", 0) or 0
     yelp_sent = yelp_sentiment_score(yelp_details)
 
-    # Foot traffic proxy
     def _foot_from_zip(z):
         if not z: return 0.45
         h = sum(ord(c) for c in str(z)) % 10
         return round(0.3 + 0.05 * h, 2)
     foot = _foot_from_zip(zip_code)
 
-    # FRED macro features
     fred = fred or fred_features()
     rrsfs_z = fred.get("RRSFS", {}).get("z", 0.0) or 0.0
     umcsent_z = fred.get("UMCSENT", {}).get("z", 0.0) or 0.0
     unrate_z = fred.get("UNRATE", {}).get("z", 0.0) or 0.0
 
     aux = np.array([rating, reviews, yelp_sent, foot, rrsfs_z, umcsent_z, unrate_z], dtype=float)
-    model_feats = np.concatenate([sat, latlon], axis=0)   # 514 dims
+    model_feats = np.concatenate([sat, latlon], axis=0)
 
     st.session_state['aux_feats'] = {
         "rating": rating, "reviews": reviews, "yelp_sent": yelp_sent, "foot": foot,
@@ -408,15 +471,20 @@ def build_feature_vector(img, coords, yelp_details, zip_code, fred=None):
     return model_feats, aux
 
 # --- Model & Prediction ---
+
 def load_fallback_model():
-    dummy = DummyRegressor(strategy="constant", constant=np.random.randint(12000, 24000))
+    dummy = DummyRegressor(strategy="constant", constant=float(np.random.randint(12000, 24000)))
     dummy.fit([[0]*514], [dummy.constant])
     return dummy
 
+@st.cache_resource(show_spinner=False)
 def load_real_data_model():
     path = "real_sales_data.csv"
     if os.path.exists("model.pkl"):
-        return joblib.load("model.pkl")
+        try:
+            return joblib.load("model.pkl")
+        except Exception:
+            pass
     if not os.path.exists(path):
         return load_fallback_model()
     try:
@@ -429,6 +497,7 @@ def load_real_data_model():
         return model
     except Exception:
         return load_fallback_model()
+
 
 def hybrid_prediction(model, model_feats, aux_feats):
     pred = None
@@ -453,6 +522,7 @@ def hybrid_prediction(model, model_feats, aux_feats):
     return 0.65 * pred + 0.35 * heuristic
 
 # --- Save & Visualize ---
+
 def save_prediction(store, coords, pred, aux, timestamp=None):
     ts = timestamp or pd.Timestamp.now()
     df = pd.DataFrame([[store, coords[0], coords[1], store_type, pred, aux["foot"], aux["yelp_sent"],
@@ -466,6 +536,7 @@ def save_prediction(store, coords, pred, aux, timestamp=None):
         except:
             st.warning("Corrupted history file. Overwriting.")
     df.to_csv("sales_history.csv", index=False)
+
 
 def plot_insights(store):
     if 'sales_history.csv' not in os.listdir():
@@ -492,11 +563,10 @@ def plot_insights(store):
     fig_type = px.bar(avg_type, x="type", y="sales", color="type", title="Avg Weekly Sales per Store Type")
     st.plotly_chart(fig_type, use_container_width=True)
 
-# --- Strategy Engine (clear & distinct) ---
+# --- Strategy Engine ---
+
 def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=6, seed=None):
     rng = random.Random(seed or f"{store}-{int(time.time()//3600)}")
-
-    # Footfall lanes
     low_foot = [
         "OFF-PEAK BUNDLE: 3–5pm combo at -12% (window cling + counter tent).",
         "LOCAL PARTNERS: cross-promo with nearby gym/school (show ID = 10% off).",
@@ -512,8 +582,6 @@ def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=6, 
         "POS UPSELL: one-tap add-ons (‘+sauce +$0.75’) visible at checkout.",
         "LOYALTY LADDER: 5 visits = free item; 10 = premium reward.",
     ]
-
-    # Buzz lanes
     weak_buzz = [
         "REVIEW QR: on receipts + takeout bags; reward after posting.",
         "LISTING REFRESH: new photos, accurate hours, pin top items.",
@@ -526,7 +594,6 @@ def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=6, 
         "MICRO-INFLUENCER (1–5k local): unique code for store-only item.",
         "VIP HOUR: followers get a secret menu item for 1 hour weekly.",
     ]
-
     flavor = {
         "Coffee Shop": [
             "ROTATING SINGLE-ORIGIN: stamp card for trying 3 varieties.",
@@ -542,7 +609,6 @@ def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=6, 
         ],
         "Any": [], "Other": []
     }
-
     macros = []
     if fred.get("UMCSENT", {}).get("z", 0) < -0.5:
         macros += ["LEAN VALUE MESSAGING: emphasize bundles/loyalty while sentiment is weak."]
@@ -550,7 +616,6 @@ def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=6, 
         macros += ["BUDGET-FRIENDLY MENU: spotlight affordable sets while labor market softens."]
     if fred.get("RRSFS", {}).get("z", 0) > 0.5:
         macros += ["TEST PREMIUM ADD-ONS: above-trend retail demand supports upsells."]
-
     base = []
     if sales < 10000:
         base += ["TRIM MENU TO BEST-SELLERS for faster service + fewer stockouts.",
@@ -558,10 +623,8 @@ def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=6, 
     elif sales > 30000:
         base += ["SECOND-SITE SCOPING: heatmap + competitor spacing + staffing plan.",
                  "ONLINE ORDERING with curbside slots."]
-
     pool = low_foot if foot < 0.4 else mid_foot if foot < 0.6 else high_foot
     pool_buzz = weak_buzz if soc < 40 else mid_buzz if soc < 70 else high_buzz
-
     recs = set()
     recs.update(rng.sample(pool, k=min(2, len(pool))))
     recs.update(rng.sample(pool_buzz, k=min(2, len(pool_buzz))))
@@ -569,7 +632,6 @@ def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=6, 
     if fpool: recs.update(rng.sample(fpool, k=min(1, len(fpool))))
     if base:  recs.update(rng.sample(base,  k=min(1, len(base))))
     if macros: recs.update(rng.sample(macros, k=min(1, len(macros))))
-
     icons = []
     for item in recs:
         if "review" in item.lower(): icons.append("⭐ " + item)
@@ -581,31 +643,33 @@ def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=6, 
 
 # --- Main App Execution ---
 st.title("📊 Retail AI: Forecast & Strategy")
-store = st.text_input("🏪 Store Name (e.g. Dave's Hot Chicken)")
-zip_code = st.text_input("📍 ZIP Code (required)")
-town = st.text_input("🏙️ Town")
-state = st.text_input("🏞️ State")
+store = st.text_input("🏪 Store Name (e.g. Dave's Hot Chicken)", key="store_name")
+zip_code = st.text_input("📍 ZIP Code (required)", key="zip")
+town = st.text_input("🏙️ Town", key="town")
+state = st.text_input("🏞️ State", key="state")
 coords = None
 yelp_details = None
 
+# Always render a map, but upgrade as soon as inputs are valid
 if store and zip_code and town and state:
-    # resolve candidates (Yelp-first) and show interactive map (click to refine)
     candidates, yelp_details = resolve_store_location(store, zip_code, town, state)
     coords = show_map_with_selection(candidates, key="map1")
 else:
-    # If not enough inputs, still show a map so user understands the UI
-    coords = show_map_with_selection([(40.7128, -74.0060, "New York (default)")], key="map_default")
+    zc = zip_centroid(zip_code) if zip_code else None
+    if zc:
+        lat, lon, lab = zc
+        coords = show_map_with_selection([(lat, lon, lab)], key="map_default_zip")
+    else:
+        coords = show_map_with_selection([(40.7128, -74.0060, "New York (default)")], key="map_default")
 
 # --- Satellite + Yelp panel ---
 if coords:
     image = fetch_or_upload_satellite_image(coords)
     st.image(image, caption="🛰️ Satellite View", use_container_width=True)
-
     # Ensure Yelp details (if not already resolved)
     if not yelp_details and (store and (zip_code or (town and state))):
         yelp_details = find_yelp_business(store, zip_code=zip_code, town=town, state=state, coords_hint=coords)
 
-    # Yelp UI
     def _stars(rating):
         try: r = float(rating)
         except: return "—"
@@ -640,38 +704,32 @@ if coords:
             if tx: st.write("**Transactions**: " + ", ".join(tx))
             st.write(f"**Phone**: {yelp_details.get('display_phone') or yelp_details.get('phone') or '—'}")
             if yelp_details.get("url"): st.write(f"[Open on Yelp]({yelp_details['url']})")
-
-            # Hours (today)
             if yelp_details.get("hours"):
+                import datetime as _dt
                 todays = yelp_details["hours"][0].get("open", [])
-                if todays:
-                    import datetime as _dt
-                    dow = _dt.datetime.today().weekday()
-                    todays_spans = [o for o in todays if o.get("day") == dow]
-                    st.markdown("**Hours (today)**")
-                    if todays_spans:
-                        for span in todays_spans:
-                            s, e = span.get("start",""), span.get("end","")
-                            st.write(f"{s[:2]}:{s[2:]}–{e[:2]}:{e[2:]}" if len(s)>=4 and len(e)>=4 else "—")
-                    else:
-                        st.write("—")
-
-            # Reviews
+                dow = _dt.datetime.today().weekday()
+                todays_spans = [o for o in todays if o.get("day") == dow]
+                st.markdown("**Hours (today)**")
+                if todays_spans:
+                    for span in todays_spans:
+                        s, e = span.get("start",""), span.get("end","")
+                        st.write(f"{s[:2]}:{s[2:]}–{e[:2]}:{e[2:]}" if len(s)>=4 and len(e)>=4 else "—")
+                else:
+                    st.write("—")
             reviews = yelp_details.get("top_reviews") or []
             if reviews:
                 st.markdown("**Recent Reviews**")
                 for r in reviews:
                     author = (r.get("user") or {}).get("name", "Anonymous")
                     rr = r.get("rating", "?")
-                    txt = (r.get("text","") or "").strip()
+                    txt = (r.get("text", "") or "").strip()
                     st.write(f"• _{author}_ — {rr}⭐: {txt}")
-
         with right:
             photos = yelp_details.get("photos") or []
             for p in photos[:3]:
                 if p: st.image(p, use_container_width=True)
     elif not YELP_API_KEY:
-        st.info("Add a Yelp API key in Streamlit Secrets to enable Yelp Insights.")
+        st.info("Add a Yelp API key in Secrets to enable Yelp Insights.")
 
     # --- Macro Panel (FRED) ---
     macros = fred_features() if FRED_API_KEY else {}
@@ -694,7 +752,7 @@ if coords:
             st.write("z-score:", f"{macros['UNRATE']['z']:.2f}" if macros['UNRATE']['z'] is not None else "—")
             st.write("YoY:", fmt(macros['UNRATE']['yoy'], pct=True))
     else:
-        st.info("Add a FRED_API_KEY in Streamlit Secrets to enable macro-aware modeling.")
+        st.info("Add a FRED_API_KEY in Secrets to enable macro-aware modeling.")
 
     # --- Predict & Analyze ---
     if st.button("📊 Predict & Analyze"):
@@ -705,10 +763,8 @@ if coords:
             model = load_real_data_model()
             pred = hybrid_prediction(model, model_feats, aux_feats)
             st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}**")
-
             save_prediction(store, coords, pred, st.session_state['aux_feats'])
             plot_insights(store)
-
             st.subheader("📦 Strategy Recommendations")
             for r in generate_recommendations(
                 store, store_type,
