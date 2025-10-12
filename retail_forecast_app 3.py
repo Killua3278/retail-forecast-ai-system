@@ -1,4 +1,5 @@
 # ✅ Retail AI App — Robbinsville‑optimized: Yelp + ZIP + Satellite (Google → Esri fallback) + FRED + Strategy
+# (Edited with brand‑calibrated predictions + realistic bounds)
 
 # --- Imports and Setup ---
 import streamlit as st
@@ -29,6 +30,7 @@ import time
 from math import radians, cos, asin, sqrt, log, tan, pi
 import random
 from datetime import datetime, timedelta
+from typing import Optional, Tuple
 
 load_dotenv()
 st.set_page_config(page_title="Retail AI Platform", layout="wide")
@@ -493,24 +495,101 @@ def load_real_data_model():
     except Exception:
         return load_fallback_model()
 
+# ------------------------------
+# Brand / Chain calibration
+# ------------------------------
 
-def hybrid_prediction(model, model_feats, aux_feats):
-    pred = None
+KNOWN_CHAINS = {
+    "taco bell", "mcdonald", "burger king", "wendy", "chipotle", "kfc", "subway",
+    "chick-fil-a", "domino", "papa john", "little caesars", "dunkin", "starbucks",
+    "panera", "five guys", "shake shack", "popeyes", "arbys", "sonic", "culver",
+}
+
+def is_chain(store_name: str, yelp_details: Optional[dict]) -> bool:
+    name = (store_name or "").lower()
+    if any(k in name for k in KNOWN_CHAINS):
+        return True
+    if yelp_details:
+        yn = str(yelp_details.get("name", "")).lower()
+        if any(k in yn for k in KNOWN_CHAINS):
+            return True
+        url = str(yelp_details.get("url", "")).lower()
+        if any(k.replace(" ", "-") in url for k in KNOWN_CHAINS):
+            return True
+    return False
+
+
+def business_size_factor(store_type: str, is_chain_flag: bool, reviews: int) -> float:
+    base = 0.9
+    if store_type == "Fast Food":
+        base = 1.0
+    elif store_type == "Coffee Shop":
+        base = 0.85
+    elif store_type == "Boutique":
+        base = 0.8
+    chain_uplift = 1.18 if is_chain_flag else 0.9
+    review_uplift = 1.0 + min(max(reviews, 0), 600) / 6000.0  # up to +10%
+    return float(base * chain_uplift * review_uplift)
+
+
+def typical_weekly_bounds(store_type: str, is_chain_flag: bool) -> Tuple[int, int]:
+    if store_type == "Fast Food":
+        return (14000, 50000) if is_chain_flag else (7000, 22000)
+    if store_type == "Coffee Shop":
+        return (6000, 20000) if is_chain_flag else (3500, 12000)
+    if store_type == "Boutique":
+        return (4000, 18000)
+    return (5000, 25000) if is_chain_flag else (4000, 16000)
+
+
+def _soft_clip(x: float, lo: float, hi: float) -> float:
+    if np.isnan(x):
+        return (lo + hi) / 2
+    span = hi - lo
+    if span <= 0:
+        return max(lo, min(hi, x))
+    s = span * 0.05
+    if x < lo:
+        return lo + (np.tanh((x - lo) / s) + 1) * (s / 2)
+    if x > hi:
+        return hi - (np.tanh((x - hi) / s) + 1) * (s / 2)
+    return x
+
+
+def hybrid_prediction(model, model_feats, aux_feats, *, store_name: str = "", store_type: str = "Any", yelp_details: Optional[dict] = None):
+    # 1) Model
     try:
-        pred = float(model.predict([model_feats])[0])
+        model_pred = float(model.predict([model_feats])[0])
+        if not np.isfinite(model_pred):
+            model_pred = None
     except Exception:
-        pred = None
+        model_pred = None
+
+    # 2) Heuristic core
     rating, reviews, yelp_sent, foot, rrsfs_z, umcsent_z, unrate_z = aux_feats
-    baseline = 15000.0
-    rat_mult = 1.0 + (rating - 4.0) * 0.07
-    rev_mult = 1.0 + min(reviews, 1000) / 10000.0
-    buzz_mult = 1.0 + (yelp_sent - 50) / 500.0
-    foot_mult = 0.8 + foot
-    macro_mult = (1.0 + 0.05 * rrsfs_z) * (1.0 + 0.04 * umcsent_z) * (1.0 - 0.04 * unrate_z)
-    heuristic = float(np.clip(baseline * rat_mult * rev_mult * buzz_mult * foot_mult * macro_mult, 3000, 75000))
-    if pred is None or np.isnan(pred) or pred < 2000 or pred > 100000:
-        return heuristic
-    return 0.65 * pred + 0.35 * heuristic
+    baseline = 12000.0 if store_type == "Fast Food" else 9000.0
+    rat_mult  = 1.0 + (float(rating) - 4.0) * 0.05
+    rev_mult  = 1.0 + min(max(float(reviews), 0.0), 800.0) / 16000.0
+    buzz_mult = 1.0 + (float(yelp_sent) - 50.0) / 800.0
+    foot_mult = 0.85 + float(foot)
+    macro_mult = (1.0 + 0.03 * float(rrsfs_z)) * (1.0 + 0.02 * float(umcsent_z)) * (1.0 - 0.02 * float(unrate_z))
+    heuristic = baseline * rat_mult * rev_mult * buzz_mult * foot_mult * macro_mult
+
+    # 3) Brand calibration
+    chain_flag = is_chain(store_name, yelp_details)
+    size_mult = business_size_factor(store_type, chain_flag, int(reviews or 0))
+    calibrated = heuristic * size_mult
+
+    # 4) Blend
+    if model_pred is None or not (1000 <= model_pred <= 100000):
+        blended = calibrated
+    else:
+        blended = 0.55 * model_pred + 0.45 * calibrated
+
+    # 5) Bounds
+    lo, hi = typical_weekly_bounds(store_type, chain_flag)
+    final = _soft_clip(blended, lo, hi)
+    return float(max(lo * 0.9, min(hi * 1.05, final)))
 
 # --- Save & Visualize ---
 
@@ -558,7 +637,6 @@ def plot_insights(store):
 
 def generate_recommendations(store, store_type, foot, soc, sales, fred, *, n=8, seed=None):
     rng = random.Random(seed or f"{store}-{int(time.time()//3600)}")
-    # Daypart priors for suburban Robbinsville
     low_foot = [
         "LULL HACK (2–4pm): combo at -10% + receipt QR to join SMS list (goal: +15% tickets in lull).",
         "SCHOOL PARTNER: RHS/elementary flyer w/ code; 10% to PTA (goal: 50 redemptions/mo).",
@@ -748,16 +826,26 @@ if coords:
         try:
             model_feats, aux_feats = build_feature_vector(image, coords, yelp_details, zip_code, fred=macros)
             model = load_real_data_model()
-            pred = hybrid_prediction(model, model_feats, aux_feats)
+            pred = hybrid_prediction(model, model_feats, aux_feats, store_name=store, store_type=store_type, yelp_details=yelp_details)
             st.markdown(f"## 💰 Predicted Weekly Sales: **${pred:,.2f}**")
-            save_prediction(store, coords, pred, st.session_state['aux_feats'])
+            # store aux dict for history save
+            aux_dict = {
+                "foot": float(aux_feats[3]),
+                "yelp_sent": float(aux_feats[2]),
+                "rating": float(aux_feats[0]),
+                "reviews": float(aux_feats[1]),
+                "rrsfs_z": float(aux_feats[4]),
+                "umcsent_z": float(aux_feats[5]),
+                "unrate_z": float(aux_feats[6]),
+            }
+            save_prediction(store, coords, pred, aux_dict)
             plot_insights(store)
             st.subheader("📦 Strategy Recommendations (Robbinsville‑tuned)")
             for r in generate_recommendations(
                 store,
                 store_type,
-                st.session_state['aux_feats']['foot'],
-                st.session_state['aux_feats']['yelp_sent'],
+                aux_dict['foot'],
+                aux_dict['yelp_sent'],
                 pred,
                 macros,
             ):
